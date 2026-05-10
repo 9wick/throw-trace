@@ -1,5 +1,5 @@
-/// Extract @throws declarations from a JSDoc comment string.
-/// Returns Vec of (type_name, optional_description).
+/// Extract @throws declarations from a `JSDoc` comment string.
+/// Returns Vec of (`type_name`, `optional_description`).
 pub fn extract_throws_from_jsdoc(comment: &str) -> Vec<(String, Option<String>)> {
     let mut results = Vec::new();
 
@@ -16,11 +16,8 @@ pub fn extract_throws_from_jsdoc(comment: &str) -> Vec<(String, Option<String>)>
             if let Some(end_brace) = rest.find('}') {
                 let type_name = rest[1..end_brace].trim().to_string();
                 let description = rest[end_brace + 1..].trim();
-                let desc = if description.is_empty() {
-                    None
-                } else {
-                    Some(description.to_string())
-                };
+                let desc =
+                    if description.is_empty() { None } else { Some(description.to_string()) };
                 results.push((type_name, desc));
             }
         } else {

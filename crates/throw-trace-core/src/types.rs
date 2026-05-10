@@ -18,19 +18,11 @@ pub struct FunctionId {
 
 impl FunctionId {
     pub fn new(file_path: PathBuf, name: impl Into<CompactString>, span: Span) -> Self {
-        Self {
-            file_path,
-            name: name.into(),
-            span,
-        }
+        Self { file_path, name: name.into(), span }
     }
 
     pub fn anonymous(file_path: PathBuf, line: u32, span: Span) -> Self {
-        Self {
-            file_path,
-            name: format!("anonymous_L{line}").into(),
-            span,
-        }
+        Self { file_path, name: format!("anonymous_L{line}").into(), span }
     }
 }
 

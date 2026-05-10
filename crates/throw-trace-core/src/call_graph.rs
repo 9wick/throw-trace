@@ -9,16 +9,13 @@ pub struct CallGraph {
 
 impl CallGraph {
     pub fn new() -> Self {
-        Self {
-            graph: DiGraph::new(),
-            node_map: HashMap::new(),
-        }
+        Self { graph: DiGraph::new(), node_map: HashMap::new() }
     }
 
     pub fn add_function(&mut self, id: FunctionId) {
-        if !self.node_map.contains_key(&id) {
-            let idx = self.graph.add_node(id.clone());
-            self.node_map.insert(id, idx);
+        if let std::collections::hash_map::Entry::Vacant(e) = self.node_map.entry(id) {
+            let idx = self.graph.add_node(e.key().clone());
+            e.insert(idx);
         }
     }
 
@@ -26,11 +23,9 @@ impl CallGraph {
         self.node_map.contains_key(id)
     }
 
-    pub fn add_call(&mut self, caller: &FunctionId, callee: &FunctionId) {
-        if let (Some(&caller_idx), Some(&callee_idx)) =
-            (self.node_map.get(caller), self.node_map.get(callee))
-        {
-            self.graph.add_edge(caller_idx, callee_idx, ());
+    pub fn add_call(&mut self, from: &FunctionId, to: &FunctionId) {
+        if let (Some(&from_idx), Some(&to_idx)) = (self.node_map.get(from), self.node_map.get(to)) {
+            self.graph.add_edge(from_idx, to_idx, ());
         }
     }
 

@@ -9,8 +9,8 @@ pub use call_graph::CallGraph;
 pub use diagnostic::generate_diagnostics;
 pub use propagation::compute_propagated_throws;
 pub use types::{
-    CallSite, DeclaredThrow, Diagnostic, ErrorType, FunctionId, FunctionSignature,
-    PropagatedThrow, Span, ThrowSite, TryCatchBlock,
+    CallSite, DeclaredThrow, Diagnostic, ErrorType, FunctionId, FunctionSignature, PropagatedThrow,
+    Span, ThrowSite, TryCatchBlock,
 };
 
 #[cfg(test)]
@@ -31,7 +31,8 @@ mod tests {
 
     #[test]
     fn function_id_anonymous() {
-        let id = FunctionId::anonymous(PathBuf::from("src/util.ts"), 42, Span { start: 100, end: 150 });
+        let id =
+            FunctionId::anonymous(PathBuf::from("src/util.ts"), 42, Span { start: 100, end: 150 });
         assert_eq!(id.name.as_str(), "anonymous_L42");
     }
 
@@ -69,10 +70,8 @@ mod tests {
 
     #[test]
     fn call_site_creation() {
-        let call = CallSite {
-            callee_name: "validate".into(),
-            location: Span { start: 200, end: 220 },
-        };
+        let call =
+            CallSite { callee_name: "validate".into(), location: Span { start: 200, end: 220 } };
         assert_eq!(call.callee_name.as_str(), "validate");
     }
 
@@ -206,17 +205,20 @@ mod tests {
         let mut signatures: HashMap<FunctionId, FunctionSignature> = HashMap::new();
         let id = FunctionId::new(PathBuf::from("a.ts"), "foo", Span { start: 0, end: 50 });
 
-        signatures.insert(id.clone(), FunctionSignature {
-            id: id.clone(),
-            declared_throws: vec![],
-            direct_throws: vec![ThrowSite {
-                location: Span { start: 10, end: 30 },
-                error_type: ErrorType::Named("MyError".into()),
-            }],
-            calls: vec![],
-            try_catch_blocks: vec![],
-            is_async: false,
-        });
+        signatures.insert(
+            id.clone(),
+            FunctionSignature {
+                id: id.clone(),
+                declared_throws: vec![],
+                direct_throws: vec![ThrowSite {
+                    location: Span { start: 10, end: 30 },
+                    error_type: ErrorType::Named("MyError".into()),
+                }],
+                calls: vec![],
+                try_catch_blocks: vec![],
+                is_async: false,
+            },
+        );
 
         let graph = CallGraph::new();
         let diagnostics = generate_diagnostics(&signatures, &graph);
@@ -229,21 +231,24 @@ mod tests {
         let mut signatures: HashMap<FunctionId, FunctionSignature> = HashMap::new();
         let id = FunctionId::new(PathBuf::from("a.ts"), "foo", Span { start: 0, end: 50 });
 
-        signatures.insert(id.clone(), FunctionSignature {
-            id: id.clone(),
-            declared_throws: vec![DeclaredThrow {
-                error_type: "MyError".into(),
-                description: None,
-                span: Span { start: 0, end: 10 },
-            }],
-            direct_throws: vec![ThrowSite {
-                location: Span { start: 10, end: 30 },
-                error_type: ErrorType::Named("MyError".into()),
-            }],
-            calls: vec![],
-            try_catch_blocks: vec![],
-            is_async: false,
-        });
+        signatures.insert(
+            id.clone(),
+            FunctionSignature {
+                id: id.clone(),
+                declared_throws: vec![DeclaredThrow {
+                    error_type: "MyError".into(),
+                    description: None,
+                    span: Span { start: 0, end: 10 },
+                }],
+                direct_throws: vec![ThrowSite {
+                    location: Span { start: 10, end: 30 },
+                    error_type: ErrorType::Named("MyError".into()),
+                }],
+                calls: vec![],
+                try_catch_blocks: vec![],
+                is_async: false,
+            },
+        );
 
         let graph = CallGraph::new();
         let diagnostics = generate_diagnostics(&signatures, &graph);
@@ -258,29 +263,35 @@ mod tests {
         let inner = FunctionId::new(PathBuf::from("a.ts"), "inner", Span { start: 0, end: 50 });
         let outer = FunctionId::new(PathBuf::from("b.ts"), "outer", Span { start: 0, end: 100 });
 
-        signatures.insert(inner.clone(), FunctionSignature {
-            id: inner.clone(),
-            declared_throws: vec![],
-            direct_throws: vec![ThrowSite {
-                location: Span { start: 10, end: 30 },
-                error_type: ErrorType::Named("InnerError".into()),
-            }],
-            calls: vec![],
-            try_catch_blocks: vec![],
-            is_async: false,
-        });
+        signatures.insert(
+            inner.clone(),
+            FunctionSignature {
+                id: inner.clone(),
+                declared_throws: vec![],
+                direct_throws: vec![ThrowSite {
+                    location: Span { start: 10, end: 30 },
+                    error_type: ErrorType::Named("InnerError".into()),
+                }],
+                calls: vec![],
+                try_catch_blocks: vec![],
+                is_async: false,
+            },
+        );
 
-        signatures.insert(outer.clone(), FunctionSignature {
-            id: outer.clone(),
-            declared_throws: vec![],
-            direct_throws: vec![],
-            calls: vec![CallSite {
-                callee_name: "inner".into(),
-                location: Span { start: 50, end: 60 },
-            }],
-            try_catch_blocks: vec![],
-            is_async: false,
-        });
+        signatures.insert(
+            outer.clone(),
+            FunctionSignature {
+                id: outer.clone(),
+                declared_throws: vec![],
+                direct_throws: vec![],
+                calls: vec![CallSite {
+                    callee_name: "inner".into(),
+                    location: Span { start: 50, end: 60 },
+                }],
+                try_catch_blocks: vec![],
+                is_async: false,
+            },
+        );
 
         graph.add_function(inner.clone());
         graph.add_function(outer.clone());

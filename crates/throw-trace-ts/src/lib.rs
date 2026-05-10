@@ -84,7 +84,8 @@ mod tests {
 
     #[test]
     fn extract_throws_multiple() {
-        let comment = "/**\n * @throws {ValidationError}\n * @throws {NetworkError} Connection failed\n */";
+        let comment =
+            "/**\n * @throws {ValidationError}\n * @throws {NetworkError} Connection failed\n */";
         let throws = extract_throws_from_jsdoc(comment);
         assert_eq!(throws.len(), 2);
         assert_eq!(throws[0].0, "ValidationError");

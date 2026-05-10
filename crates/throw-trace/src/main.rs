@@ -38,11 +38,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Some(Commands::Check {
-            paths,
-            exclude,
-            format,
-        }) => {
+        Some(Commands::Check { paths, exclude, format }) => {
             let output_format = OutputFormat::from_str(&format)
                 .ok_or_else(|| anyhow::anyhow!("Invalid format: {format}"))?;
 

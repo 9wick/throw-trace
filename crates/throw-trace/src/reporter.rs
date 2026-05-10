@@ -59,7 +59,7 @@ fn report_text(diagnostics: &[Diagnostic], files_checked: usize) -> io::Result<(
     let mut stdout = io::stdout().lock();
 
     if diagnostics.is_empty() {
-        writeln!(stdout, "No issues found in {} files", files_checked)?;
+        writeln!(stdout, "No issues found in {files_checked} files")?;
         return Ok(());
     }
 
@@ -69,24 +69,13 @@ fn report_text(diagnostics: &[Diagnostic], files_checked: usize) -> io::Result<(
         writeln!(stdout, "   |")?;
 
         for missing in &diag.missing_throws {
-            let type_name = missing
-                .error_type
-                .type_name()
-                .unwrap_or("Unknown");
-            writeln!(
-                stdout,
-                "   | {} propagates from {:?}",
-                type_name,
-                missing.origin.location
-            )?;
+            let type_name = missing.error_type.type_name().unwrap_or("Unknown");
+            writeln!(stdout, "   | {} propagates from {:?}", type_name, missing.origin.location)?;
         }
 
         writeln!(stdout, "   |")?;
-        let types: Vec<_> = diag
-            .missing_throws
-            .iter()
-            .filter_map(|m| m.error_type.type_name())
-            .collect();
+        let types: Vec<_> =
+            diag.missing_throws.iter().filter_map(|m| m.error_type.type_name()).collect();
         writeln!(
             stdout,
             "   = help: add @throws {{{}}} to function {}",
@@ -97,12 +86,7 @@ fn report_text(diagnostics: &[Diagnostic], files_checked: usize) -> io::Result<(
     }
 
     let error_count: usize = diagnostics.iter().map(|d| d.missing_throws.len()).sum();
-    writeln!(
-        stdout,
-        "Found {} errors in {} files",
-        error_count,
-        files_checked
-    )?;
+    writeln!(stdout, "Found {error_count} errors in {files_checked} files")?;
 
     Ok(())
 }
@@ -129,10 +113,7 @@ fn report_json(diagnostics: &[Diagnostic], files_checked: usize) -> io::Result<(
 
     let report = JsonReport {
         diagnostics: json_diagnostics,
-        summary: Summary {
-            errors: error_count,
-            files_checked,
-        },
+        summary: Summary { errors: error_count, files_checked },
     };
 
     let json = serde_json::to_string_pretty(&report)?;

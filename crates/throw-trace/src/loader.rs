@@ -13,9 +13,7 @@ impl FileLoader {
         for pattern in exclude_patterns {
             builder.add(Glob::new(pattern).context("Invalid glob pattern")?);
         }
-        Ok(Self {
-            exclude_patterns: builder.build()?,
-        })
+        Ok(Self { exclude_patterns: builder.build()? })
     }
 
     pub fn collect_ts_files(&self, paths: &[String]) -> Result<Vec<PathBuf>> {
@@ -25,7 +23,7 @@ impl FileLoader {
             let path = Path::new(path_str);
 
             if path.is_file() {
-                if self.is_ts_file(path) && !self.is_excluded(path) {
+                if Self::is_ts_file(path) && !self.is_excluded(path) {
                     files.push(path.to_path_buf());
                 }
             } else if path.is_dir() {
@@ -33,7 +31,7 @@ impl FileLoader {
                     let entry = entry?;
                     let entry_path = entry.path();
                     if entry_path.is_file()
-                        && self.is_ts_file(entry_path)
+                        && Self::is_ts_file(entry_path)
                         && !self.is_excluded(entry_path)
                     {
                         files.push(entry_path.to_path_buf());
@@ -45,11 +43,8 @@ impl FileLoader {
         Ok(files)
     }
 
-    fn is_ts_file(&self, path: &Path) -> bool {
-        matches!(
-            path.extension().and_then(|e| e.to_str()),
-            Some("ts") | Some("tsx") | Some("mts") | Some("cts")
-        )
+    fn is_ts_file(path: &Path) -> bool {
+        matches!(path.extension().and_then(|e| e.to_str()), Some("ts" | "tsx" | "mts" | "cts"))
     }
 
     fn is_excluded(&self, path: &Path) -> bool {

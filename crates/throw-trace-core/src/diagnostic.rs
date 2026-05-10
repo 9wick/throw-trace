@@ -4,8 +4,8 @@ use crate::{
 };
 use std::collections::HashMap;
 
-pub fn generate_diagnostics(
-    signatures: &HashMap<FunctionId, FunctionSignature>,
+pub fn generate_diagnostics<S: std::hash::BuildHasher>(
+    signatures: &HashMap<FunctionId, FunctionSignature, S>,
     graph: &CallGraph,
 ) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
@@ -15,10 +15,7 @@ pub fn generate_diagnostics(
         let missing = find_missing_declarations(sig, &propagated);
 
         if !missing.is_empty() {
-            diagnostics.push(Diagnostic {
-                function: func_id.clone(),
-                missing_throws: missing,
-            });
+            diagnostics.push(Diagnostic { function: func_id.clone(), missing_throws: missing });
         }
     }
 
@@ -29,11 +26,7 @@ fn find_missing_declarations(
     sig: &FunctionSignature,
     propagated: &[PropagatedThrow],
 ) -> Vec<PropagatedThrow> {
-    propagated
-        .iter()
-        .filter(|p| !is_declared(&p.error_type, sig))
-        .cloned()
-        .collect()
+    propagated.iter().filter(|p| !is_declared(&p.error_type, sig)).cloned().collect()
 }
 
 fn is_declared(error_type: &ErrorType, sig: &FunctionSignature) -> bool {
@@ -41,7 +34,5 @@ fn is_declared(error_type: &ErrorType, sig: &FunctionSignature) -> bool {
         return false;
     };
 
-    sig.declared_throws
-        .iter()
-        .any(|d| d.error_type.as_str() == type_name.as_str())
+    sig.declared_throws.iter().any(|d| d.error_type.as_str() == type_name.as_str())
 }

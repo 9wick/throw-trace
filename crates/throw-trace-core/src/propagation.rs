@@ -1,26 +1,26 @@
 use crate::{CallGraph, ErrorType, FunctionId, FunctionSignature, PropagatedThrow, ThrowSite};
 use std::collections::{HashMap, HashSet};
 
-pub fn compute_propagated_throws(
+pub fn compute_propagated_throws<S: std::hash::BuildHasher>(
     func_id: &FunctionId,
-    signatures: &HashMap<FunctionId, FunctionSignature>,
+    signatures: &HashMap<FunctionId, FunctionSignature, S>,
     graph: &CallGraph,
 ) -> Vec<PropagatedThrow> {
     let mut result = Vec::new();
     let mut visited = HashSet::new();
 
-    collect_throws(func_id, signatures, graph, &mut result, &mut visited, vec![]);
+    collect_throws(func_id, signatures, graph, &mut result, &mut visited, &[]);
 
     result
 }
 
-fn collect_throws(
+fn collect_throws<S: std::hash::BuildHasher>(
     func_id: &FunctionId,
-    signatures: &HashMap<FunctionId, FunctionSignature>,
+    signatures: &HashMap<FunctionId, FunctionSignature, S>,
     graph: &CallGraph,
     result: &mut Vec<PropagatedThrow>,
     visited: &mut HashSet<FunctionId>,
-    path: Vec<FunctionId>,
+    path: &[FunctionId],
 ) {
     if visited.contains(func_id) {
         return;
@@ -36,15 +36,15 @@ fn collect_throws(
             result.push(PropagatedThrow {
                 error_type: throw_site.error_type.clone(),
                 origin: throw_site.clone(),
-                path: path.clone(),
+                path: path.to_owned(),
             });
         }
     }
 
     for callee_id in graph.get_callees(func_id) {
-        let mut new_path = path.clone();
+        let mut new_path = path.to_owned();
         new_path.push(func_id.clone());
-        collect_throws(&callee_id, signatures, graph, result, visited, new_path);
+        collect_throws(&callee_id, signatures, graph, result, visited, &new_path);
     }
 }
 

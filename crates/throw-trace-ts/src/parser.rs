@@ -17,12 +17,8 @@ pub fn parse_source(source: &str) -> Result<(), ParseError> {
     if parser_return.errors.is_empty() {
         Ok(())
     } else {
-        let msg = parser_return
-            .errors
-            .iter()
-            .map(|e| e.to_string())
-            .collect::<Vec<_>>()
-            .join("; ");
+        let msg =
+            parser_return.errors.iter().map(ToString::to_string).collect::<Vec<_>>().join("; ");
         Err(ParseError::SyntaxError(msg))
     }
 }

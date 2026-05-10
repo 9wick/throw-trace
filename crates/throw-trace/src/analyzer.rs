@@ -14,10 +14,7 @@ pub struct Analyzer {
 
 impl Analyzer {
     pub fn new() -> Self {
-        Self {
-            signatures: HashMap::new(),
-            graph: CallGraph::new(),
-        }
+        Self { signatures: HashMap::new(), graph: CallGraph::new() }
     }
 
     pub fn analyze_files(&mut self, files: &[PathBuf]) -> Result<()> {
@@ -41,11 +38,8 @@ impl Analyzer {
     }
 
     fn build_call_graph(&mut self) {
-        let sig_map: HashMap<&str, &FunctionId> = self
-            .signatures
-            .values()
-            .map(|sig| (sig.id.name.as_str(), &sig.id))
-            .collect();
+        let sig_map: HashMap<&str, &FunctionId> =
+            self.signatures.values().map(|sig| (sig.id.name.as_str(), &sig.id)).collect();
 
         let calls_to_add: Vec<(FunctionId, FunctionId)> = self
             .signatures
