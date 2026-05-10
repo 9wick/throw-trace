@@ -1,7 +1,9 @@
 //! Core engine for throw-trace: types, call graph, propagation analysis.
 
+mod call_graph;
 mod types;
 
+pub use call_graph::CallGraph;
 pub use types::{
     CallSite, DeclaredThrow, Diagnostic, ErrorType, FunctionId, FunctionSignature,
     PropagatedThrow, Span, ThrowSite, TryCatchBlock,
@@ -134,5 +136,40 @@ mod tests {
             }],
         };
         assert_eq!(diagnostic.missing_throws.len(), 1);
+    }
+
+    #[test]
+    fn call_graph_add_function() {
+        let mut graph = CallGraph::new();
+        let id = FunctionId::new(PathBuf::from("a.ts"), "foo", Span { start: 0, end: 50 });
+        graph.add_function(id.clone());
+        assert!(graph.contains(&id));
+    }
+
+    #[test]
+    fn call_graph_add_call() {
+        let mut graph = CallGraph::new();
+        let caller = FunctionId::new(PathBuf::from("a.ts"), "foo", Span { start: 0, end: 50 });
+        let callee = FunctionId::new(PathBuf::from("b.ts"), "bar", Span { start: 0, end: 50 });
+        graph.add_function(caller.clone());
+        graph.add_function(callee.clone());
+        graph.add_call(&caller, &callee);
+        let callees = graph.get_callees(&caller);
+        assert_eq!(callees.len(), 1);
+    }
+
+    #[test]
+    fn call_graph_transitive_callees() {
+        let mut graph = CallGraph::new();
+        let a = FunctionId::new(PathBuf::from("a.ts"), "a", Span { start: 0, end: 50 });
+        let b = FunctionId::new(PathBuf::from("b.ts"), "b", Span { start: 0, end: 50 });
+        let c = FunctionId::new(PathBuf::from("c.ts"), "c", Span { start: 0, end: 50 });
+        graph.add_function(a.clone());
+        graph.add_function(b.clone());
+        graph.add_function(c.clone());
+        graph.add_call(&a, &b);
+        graph.add_call(&b, &c);
+        let all_callees = graph.get_transitive_callees(&a);
+        assert_eq!(all_callees.len(), 2);
     }
 }
