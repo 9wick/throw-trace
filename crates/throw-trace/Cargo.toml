@@ -1,6 +1,6 @@
 [package]
 name = "throw-trace"
-description = "CLI tool for throw-trace: static analysis of throw propagation."
+description = "Static analysis tool for @throws TSDoc declarations."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,12 +8,27 @@ rust-version.workspace = true
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
+keywords = ["lint", "throws", "tsdoc", "cli", "typescript"]
+categories = ["command-line-utilities", "development-tools"]
 
 [[bin]]
 name = "throw-trace"
 path = "src/main.rs"
 
 [dependencies]
+throw-trace-core.workspace = true
+throw-trace-ts.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+ignore.workspace = true
+globset.workspace = true
+
+[dev-dependencies]
+assert_cmd.workspace = true
+predicates.workspace = true
+tempfile.workspace = true
 
 [lints]
 workspace = true
