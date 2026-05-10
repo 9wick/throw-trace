@@ -1,6 +1,6 @@
 [package]
 name = "throw-trace-ts"
-description = "TypeScript parser integration for throw-trace."
+description = "TypeScript adapter for throw-trace (oxc-based)."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,8 +8,17 @@ rust-version.workspace = true
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
+keywords = ["typescript", "javascript", "lint", "ast", "oxc"]
+categories = ["development-tools", "parser-implementations"]
 
 [dependencies]
+throw-trace-core.workspace = true
+oxc_parser.workspace = true
+oxc_ast.workspace = true
+oxc_allocator.workspace = true
+oxc_span.workspace = true
+compact_str.workspace = true
+thiserror.workspace = true
 
 [lints]
 workspace = true
