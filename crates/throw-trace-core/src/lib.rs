@@ -3,8 +3,8 @@
 mod types;
 
 pub use types::{
-    CallSite, DeclaredThrow, ErrorType, FunctionId, FunctionSignature, Span, ThrowSite,
-    TryCatchBlock,
+    CallSite, DeclaredThrow, Diagnostic, ErrorType, FunctionId, FunctionSignature,
+    PropagatedThrow, Span, ThrowSite, TryCatchBlock,
 };
 
 #[cfg(test)]
@@ -96,5 +96,43 @@ mod tests {
         };
         assert_eq!(sig.id.name.as_str(), "testFn");
         assert!(!sig.is_async);
+    }
+
+    #[test]
+    fn propagated_throw_path() {
+        let origin = ThrowSite {
+            location: Span { start: 10, end: 30 },
+            error_type: ErrorType::Named("DBError".into()),
+        };
+        let propagated = PropagatedThrow {
+            error_type: ErrorType::Named("DBError".into()),
+            origin: origin.clone(),
+            path: vec![
+                FunctionId::new(PathBuf::from("a.ts"), "inner", Span { start: 0, end: 50 }),
+                FunctionId::new(PathBuf::from("b.ts"), "outer", Span { start: 0, end: 100 }),
+            ],
+        };
+        assert_eq!(propagated.path.len(), 2);
+    }
+
+    #[test]
+    fn diagnostic_missing_throws() {
+        let func_id = FunctionId::new(
+            PathBuf::from("src/service.ts"),
+            "createUser",
+            Span { start: 0, end: 200 },
+        );
+        let diagnostic = Diagnostic {
+            function: func_id,
+            missing_throws: vec![PropagatedThrow {
+                error_type: ErrorType::Named("ValidationError".into()),
+                origin: ThrowSite {
+                    location: Span { start: 50, end: 80 },
+                    error_type: ErrorType::Named("ValidationError".into()),
+                },
+                path: vec![],
+            }],
+        };
+        assert_eq!(diagnostic.missing_throws.len(), 1);
     }
 }

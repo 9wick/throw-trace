@@ -96,3 +96,16 @@ pub struct FunctionSignature {
     pub try_catch_blocks: Vec<TryCatchBlock>,
     pub is_async: bool,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PropagatedThrow {
+    pub error_type: ErrorType,
+    pub origin: ThrowSite,
+    pub path: Vec<FunctionId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Diagnostic {
+    pub function: FunctionId,
+    pub missing_throws: Vec<PropagatedThrow>,
+}
