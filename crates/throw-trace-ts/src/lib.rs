@@ -4,11 +4,13 @@ mod extract;
 mod jsdoc;
 mod parser;
 mod throw_analyzer;
+mod try_catch;
 
 pub use extract::extract_functions;
 pub use jsdoc::extract_throws_from_jsdoc;
 pub use parser::parse_source;
 pub use throw_analyzer::analyze_throw_expr;
+pub use try_catch::extract_try_catch_blocks;
 
 #[cfg(test)]
 mod tests {
@@ -130,5 +132,51 @@ mod tests {
         let source = "throw err";
         let result = analyze_throw_expr(source);
         assert_eq!(result, ErrorType::Unknown);
+    }
+
+    #[test]
+    fn extract_try_catch_simple() {
+        let source = r#"
+try {
+    validate();
+} catch (e) {
+    console.log(e);
+}
+"#;
+        let blocks = extract_try_catch_blocks(source);
+        assert_eq!(blocks.len(), 1);
+        assert!(blocks[0].catch_span.is_some());
+    }
+
+    #[test]
+    fn extract_try_catch_with_instanceof() {
+        let source = r#"
+try {
+    validate();
+} catch (e) {
+    if (e instanceof ValidationError) {
+        return;
+    }
+    throw e;
+}
+"#;
+        let blocks = extract_try_catch_blocks(source);
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].caught_types.len(), 1);
+        assert_eq!(blocks[0].caught_types[0].as_str(), "ValidationError");
+    }
+
+    #[test]
+    fn extract_try_catch_no_catch() {
+        let source = r#"
+try {
+    validate();
+} finally {
+    cleanup();
+}
+"#;
+        let blocks = extract_try_catch_blocks(source);
+        assert_eq!(blocks.len(), 1);
+        assert!(blocks[0].catch_span.is_none());
     }
 }
