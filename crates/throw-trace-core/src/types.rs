@@ -73,3 +73,26 @@ pub struct CallSite {
     pub callee_name: CompactString,
     pub location: Span,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TryCatchBlock {
+    pub try_span: Span,
+    pub catch_span: Option<Span>,
+    pub caught_types: Vec<CompactString>,
+}
+
+impl TryCatchBlock {
+    pub fn contains(&self, offset: u32) -> bool {
+        offset >= self.try_span.start && offset < self.try_span.end
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FunctionSignature {
+    pub id: FunctionId,
+    pub declared_throws: Vec<DeclaredThrow>,
+    pub direct_throws: Vec<ThrowSite>,
+    pub calls: Vec<CallSite>,
+    pub try_catch_blocks: Vec<TryCatchBlock>,
+    pub is_async: bool,
+}
