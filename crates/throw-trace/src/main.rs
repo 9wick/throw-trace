@@ -1,4 +1,8 @@
+mod loader;
+
+use anyhow::Result;
 use clap::Parser;
+use loader::FileLoader;
 
 #[derive(Parser)]
 #[command(name = "throw-trace")]
@@ -15,18 +19,37 @@ enum Commands {
         /// Files or directories to check
         #[arg(default_value = ".")]
         paths: Vec<String>,
+
+        /// Exclude patterns (glob)
+        #[arg(long, short = 'e')]
+        exclude: Vec<String>,
+
+        /// Output format
+        #[arg(long, short = 'f', default_value = "text")]
+        format: String,
     },
 }
 
-fn main() {
+fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Some(Commands::Check { paths }) => {
-            println!("Checking: {:?}", paths);
+        Some(Commands::Check {
+            paths,
+            exclude,
+            format,
+        }) => {
+            let loader = FileLoader::new(&exclude)?;
+            let files = loader.collect_ts_files(&paths)?;
+            println!("Found {} TypeScript files", files.len());
+            for file in &files {
+                println!("  {}", file.display());
+            }
+            Ok(())
         }
         None => {
             println!("Use --help for usage information");
+            Ok(())
         }
     }
 }
