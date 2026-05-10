@@ -39,3 +39,24 @@ impl fmt::Display for FunctionId {
         write!(f, "{}:{}", self.file_path.display(), self.name)
     }
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ErrorType {
+    Named(CompactString),
+    Unknown,
+}
+
+impl ErrorType {
+    pub fn type_name(&self) -> Option<&str> {
+        match self {
+            Self::Named(name) => Some(name.as_str()),
+            Self::Unknown => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThrowSite {
+    pub location: Span,
+    pub error_type: ErrorType,
+}

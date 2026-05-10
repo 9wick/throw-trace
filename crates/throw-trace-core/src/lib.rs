@@ -2,7 +2,7 @@
 
 mod types;
 
-pub use types::{FunctionId, Span};
+pub use types::{ErrorType, FunctionId, Span, ThrowSite};
 
 #[cfg(test)]
 mod tests {
@@ -23,5 +23,26 @@ mod tests {
     fn function_id_anonymous() {
         let id = FunctionId::anonymous(PathBuf::from("src/util.ts"), 42, Span { start: 100, end: 150 });
         assert_eq!(id.name.as_str(), "anonymous_L42");
+    }
+
+    #[test]
+    fn error_type_named() {
+        let err = ErrorType::Named("ValidationError".into());
+        assert_eq!(err.type_name(), Some("ValidationError"));
+    }
+
+    #[test]
+    fn error_type_unknown() {
+        let err = ErrorType::Unknown;
+        assert_eq!(err.type_name(), None);
+    }
+
+    #[test]
+    fn throw_site_creation() {
+        let site = ThrowSite {
+            location: Span { start: 100, end: 120 },
+            error_type: ErrorType::Named("MyError".into()),
+        };
+        assert_eq!(site.error_type.type_name(), Some("MyError"));
     }
 }
