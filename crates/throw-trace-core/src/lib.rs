@@ -2,7 +2,7 @@
 
 mod types;
 
-pub use types::{ErrorType, FunctionId, Span, ThrowSite};
+pub use types::{CallSite, DeclaredThrow, ErrorType, FunctionId, Span, ThrowSite};
 
 #[cfg(test)]
 mod tests {
@@ -44,5 +44,25 @@ mod tests {
             error_type: ErrorType::Named("MyError".into()),
         };
         assert_eq!(site.error_type.type_name(), Some("MyError"));
+    }
+
+    #[test]
+    fn declared_throw_with_description() {
+        let decl = DeclaredThrow {
+            error_type: "ValidationError".into(),
+            description: Some("When input is invalid".into()),
+            span: Span { start: 5, end: 50 },
+        };
+        assert_eq!(decl.error_type.as_str(), "ValidationError");
+        assert!(decl.description.is_some());
+    }
+
+    #[test]
+    fn call_site_creation() {
+        let call = CallSite {
+            callee_name: "validate".into(),
+            location: Span { start: 200, end: 220 },
+        };
+        assert_eq!(call.callee_name.as_str(), "validate");
     }
 }

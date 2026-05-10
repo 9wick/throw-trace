@@ -60,3 +60,16 @@ pub struct ThrowSite {
     pub location: Span,
     pub error_type: ErrorType,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeclaredThrow {
+    pub error_type: CompactString,
+    pub description: Option<CompactString>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CallSite {
+    pub callee_name: CompactString,
+    pub location: Span,
+}
