@@ -1,10 +1,12 @@
 mod analyzer;
 mod loader;
+mod reporter;
 
 use analyzer::Analyzer;
 use anyhow::Result;
 use clap::Parser;
 use loader::FileLoader;
+use reporter::{report, OutputFormat};
 
 #[derive(Parser)]
 #[command(name = "throw-trace")]
@@ -26,7 +28,7 @@ enum Commands {
         #[arg(long, short = 'e')]
         exclude: Vec<String>,
 
-        /// Output format
+        /// Output format (text or json)
         #[arg(long, short = 'f', default_value = "text")]
         format: String,
     },
@@ -41,6 +43,9 @@ fn main() -> Result<()> {
             exclude,
             format,
         }) => {
+            let output_format = OutputFormat::from_str(&format)
+                .ok_or_else(|| anyhow::anyhow!("Invalid format: {format}"))?;
+
             let loader = FileLoader::new(&exclude)?;
             let files = loader.collect_ts_files(&paths)?;
 
@@ -54,13 +59,10 @@ fn main() -> Result<()> {
 
             let diagnostics = analyzer.generate_diagnostics();
 
-            if diagnostics.is_empty() {
-                println!("No issues found");
-            } else {
-                println!("Found {} issues", diagnostics.len());
-                for diag in &diagnostics {
-                    println!("  {}: missing @throws", diag.function);
-                }
+            report(&diagnostics, files.len(), output_format)?;
+
+            if !diagnostics.is_empty() {
+                std::process::exit(1);
             }
 
             Ok(())
