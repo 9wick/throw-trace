@@ -1,10 +1,12 @@
 //! Core engine for throw-trace: types, call graph, propagation analysis.
 
 mod call_graph;
+mod diagnostic;
 mod propagation;
 mod types;
 
 pub use call_graph::CallGraph;
+pub use diagnostic::generate_diagnostics;
 pub use propagation::compute_propagated_throws;
 pub use types::{
     CallSite, DeclaredThrow, Diagnostic, ErrorType, FunctionId, FunctionSignature,
@@ -197,6 +199,55 @@ mod tests {
         let propagated = compute_propagated_throws(&id, &signatures, &graph);
         assert_eq!(propagated.len(), 1);
         assert_eq!(propagated[0].error_type, ErrorType::Named("MyError".into()));
+    }
+
+    #[test]
+    fn diagnostic_missing_declaration() {
+        let mut signatures: HashMap<FunctionId, FunctionSignature> = HashMap::new();
+        let id = FunctionId::new(PathBuf::from("a.ts"), "foo", Span { start: 0, end: 50 });
+
+        signatures.insert(id.clone(), FunctionSignature {
+            id: id.clone(),
+            declared_throws: vec![],
+            direct_throws: vec![ThrowSite {
+                location: Span { start: 10, end: 30 },
+                error_type: ErrorType::Named("MyError".into()),
+            }],
+            calls: vec![],
+            try_catch_blocks: vec![],
+            is_async: false,
+        });
+
+        let graph = CallGraph::new();
+        let diagnostics = generate_diagnostics(&signatures, &graph);
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].missing_throws.len(), 1);
+    }
+
+    #[test]
+    fn diagnostic_declared_ok() {
+        let mut signatures: HashMap<FunctionId, FunctionSignature> = HashMap::new();
+        let id = FunctionId::new(PathBuf::from("a.ts"), "foo", Span { start: 0, end: 50 });
+
+        signatures.insert(id.clone(), FunctionSignature {
+            id: id.clone(),
+            declared_throws: vec![DeclaredThrow {
+                error_type: "MyError".into(),
+                description: None,
+                span: Span { start: 0, end: 10 },
+            }],
+            direct_throws: vec![ThrowSite {
+                location: Span { start: 10, end: 30 },
+                error_type: ErrorType::Named("MyError".into()),
+            }],
+            calls: vec![],
+            try_catch_blocks: vec![],
+            is_async: false,
+        });
+
+        let graph = CallGraph::new();
+        let diagnostics = generate_diagnostics(&signatures, &graph);
+        assert!(diagnostics.is_empty());
     }
 
     #[test]
