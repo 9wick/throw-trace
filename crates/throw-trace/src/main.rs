@@ -1,5 +1,7 @@
+mod analyzer;
 mod loader;
 
+use analyzer::Analyzer;
 use anyhow::Result;
 use clap::Parser;
 use loader::FileLoader;
@@ -41,10 +43,26 @@ fn main() -> Result<()> {
         }) => {
             let loader = FileLoader::new(&exclude)?;
             let files = loader.collect_ts_files(&paths)?;
-            println!("Found {} TypeScript files", files.len());
-            for file in &files {
-                println!("  {}", file.display());
+
+            if files.is_empty() {
+                println!("No TypeScript files found");
+                return Ok(());
             }
+
+            let mut analyzer = Analyzer::new();
+            analyzer.analyze_files(&files)?;
+
+            let diagnostics = analyzer.generate_diagnostics();
+
+            if diagnostics.is_empty() {
+                println!("No issues found");
+            } else {
+                println!("Found {} issues", diagnostics.len());
+                for diag in &diagnostics {
+                    println!("  {}: missing @throws", diag.function);
+                }
+            }
+
             Ok(())
         }
         None => {
