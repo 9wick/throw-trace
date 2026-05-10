@@ -1,9 +1,11 @@
 //! Core engine for throw-trace: types, call graph, propagation analysis.
 
 mod call_graph;
+mod propagation;
 mod types;
 
 pub use call_graph::CallGraph;
+pub use propagation::compute_propagated_throws;
 pub use types::{
     CallSite, DeclaredThrow, Diagnostic, ErrorType, FunctionId, FunctionSignature,
     PropagatedThrow, Span, ThrowSite, TryCatchBlock,
@@ -12,6 +14,7 @@ pub use types::{
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
     use std::path::PathBuf;
 
     #[test]
@@ -171,5 +174,69 @@ mod tests {
         graph.add_call(&b, &c);
         let all_callees = graph.get_transitive_callees(&a);
         assert_eq!(all_callees.len(), 2);
+    }
+
+    #[test]
+    fn propagation_direct_throw() {
+        let mut signatures: HashMap<FunctionId, FunctionSignature> = HashMap::new();
+        let id = FunctionId::new(PathBuf::from("a.ts"), "foo", Span { start: 0, end: 50 });
+        let sig = FunctionSignature {
+            id: id.clone(),
+            declared_throws: vec![],
+            direct_throws: vec![ThrowSite {
+                location: Span { start: 10, end: 30 },
+                error_type: ErrorType::Named("MyError".into()),
+            }],
+            calls: vec![],
+            try_catch_blocks: vec![],
+            is_async: false,
+        };
+        signatures.insert(id.clone(), sig);
+
+        let graph = CallGraph::new();
+        let propagated = compute_propagated_throws(&id, &signatures, &graph);
+        assert_eq!(propagated.len(), 1);
+        assert_eq!(propagated[0].error_type, ErrorType::Named("MyError".into()));
+    }
+
+    #[test]
+    fn propagation_from_callee() {
+        let mut signatures: HashMap<FunctionId, FunctionSignature> = HashMap::new();
+        let mut graph = CallGraph::new();
+
+        let inner = FunctionId::new(PathBuf::from("a.ts"), "inner", Span { start: 0, end: 50 });
+        let outer = FunctionId::new(PathBuf::from("b.ts"), "outer", Span { start: 0, end: 100 });
+
+        signatures.insert(inner.clone(), FunctionSignature {
+            id: inner.clone(),
+            declared_throws: vec![],
+            direct_throws: vec![ThrowSite {
+                location: Span { start: 10, end: 30 },
+                error_type: ErrorType::Named("InnerError".into()),
+            }],
+            calls: vec![],
+            try_catch_blocks: vec![],
+            is_async: false,
+        });
+
+        signatures.insert(outer.clone(), FunctionSignature {
+            id: outer.clone(),
+            declared_throws: vec![],
+            direct_throws: vec![],
+            calls: vec![CallSite {
+                callee_name: "inner".into(),
+                location: Span { start: 50, end: 60 },
+            }],
+            try_catch_blocks: vec![],
+            is_async: false,
+        });
+
+        graph.add_function(inner.clone());
+        graph.add_function(outer.clone());
+        graph.add_call(&outer, &inner);
+
+        let propagated = compute_propagated_throws(&outer, &signatures, &graph);
+        assert_eq!(propagated.len(), 1);
+        assert_eq!(propagated[0].error_type, ErrorType::Named("InnerError".into()));
     }
 }
