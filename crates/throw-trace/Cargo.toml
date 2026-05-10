@@ -1,0 +1,19 @@
+[package]
+name = "throw-trace"
+description = "CLI tool for throw-trace: static analysis of throw propagation."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[[bin]]
+name = "throw-trace"
+path = "src/main.rs"
+
+[dependencies]
+
+[lints]
+workspace = true

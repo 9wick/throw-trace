@@ -1,0 +1,22 @@
+[package]
+name = "throw-trace-core"
+description = "Core engine for throw-trace: types, call graph, propagation analysis."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords = ["lint", "throws", "static-analysis", "typescript"]
+categories = ["development-tools"]
+
+[dependencies]
+compact_str.workspace = true
+smallvec.workspace = true
+thiserror.workspace = true
+petgraph.workspace = true
+serde.workspace = true
+
+[lints]
+workspace = true

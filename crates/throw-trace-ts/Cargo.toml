@@ -1,0 +1,15 @@
+[package]
+name = "throw-trace-ts"
+description = "TypeScript parser integration for throw-trace."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true
