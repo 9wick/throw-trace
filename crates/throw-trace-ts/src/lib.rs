@@ -3,15 +3,18 @@
 mod extract;
 mod jsdoc;
 mod parser;
+mod throw_analyzer;
 
 pub use extract::extract_functions;
 pub use jsdoc::extract_throws_from_jsdoc;
 pub use parser::parse_source;
+pub use throw_analyzer::analyze_throw_expr;
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::path::PathBuf;
+    use throw_trace_core::ErrorType;
 
     #[test]
     fn parse_source_returns_program() {
@@ -99,5 +102,33 @@ mod tests {
         let comment = "/** This is a description */";
         let throws = extract_throws_from_jsdoc(comment);
         assert!(throws.is_empty());
+    }
+
+    #[test]
+    fn analyze_throw_new_error() {
+        let source = "throw new ValidationError('msg')";
+        let result = analyze_throw_expr(source);
+        assert_eq!(result, ErrorType::Named("ValidationError".into()));
+    }
+
+    #[test]
+    fn analyze_throw_new_error_simple() {
+        let source = "throw new Error('msg')";
+        let result = analyze_throw_expr(source);
+        assert_eq!(result, ErrorType::Named("Error".into()));
+    }
+
+    #[test]
+    fn analyze_throw_literal() {
+        let source = "throw 'error'";
+        let result = analyze_throw_expr(source);
+        assert_eq!(result, ErrorType::Unknown);
+    }
+
+    #[test]
+    fn analyze_throw_variable() {
+        let source = "throw err";
+        let result = analyze_throw_expr(source);
+        assert_eq!(result, ErrorType::Unknown);
     }
 }
