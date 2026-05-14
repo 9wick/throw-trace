@@ -6,11 +6,12 @@ mod propagation;
 mod types;
 
 pub use call_graph::CallGraph;
-pub use diagnostic::generate_diagnostics_with_resolver;
+pub use diagnostic::{generate_diagnostics_with_resolver, generate_lsp_violations};
 pub use propagation::compute_propagated_throws;
 pub use types::{
-    CallSite, DeclaredThrow, Diagnostic, ErrorType, FunctionId, FunctionSignature, NoOpTypeResolver,
-    PropagatedThrow, Span, ThrowSite, TryCatchBlock, TypeResolver,
+    CallSite, DeclaredThrow, Diagnostic, ErrorType, FunctionId, FunctionSignature, LspViolation,
+    MethodSignature, NoOpTypeResolver, PropagatedThrow, RelationKind, Span, ThrowSite, TryCatchBlock,
+    TypeId, TypeRelation, TypeResolver,
 };
 
 #[cfg(test)]
@@ -388,5 +389,217 @@ mod tests {
         let propagated = compute_propagated_throws(&func, &signatures, &graph);
         assert_eq!(propagated.len(), 1);
         assert_eq!(propagated[0].error_type, ErrorType::Named("WrappedError".into()));
+    }
+
+    #[test]
+    fn lsp_violation_detects_undeclared_throw() {
+        let mut signatures: HashMap<FunctionId, FunctionSignature> = HashMap::new();
+        let graph = CallGraph::new();
+
+        // Class method that throws DBError
+        let method_id = FunctionId::new(
+            PathBuf::from("test.ts"),
+            "findById",
+            Span { start: 100, end: 200 },
+        );
+
+        signatures.insert(
+            method_id.clone(),
+            FunctionSignature {
+                id: method_id.clone(),
+                name_span: Span { start: 110, end: 118 },
+                declared_throws: vec![],
+                direct_throws: vec![ThrowSite {
+                    location: Span { start: 150, end: 180 },
+                    error_type: ErrorType::Named("DBError".into()),
+                }],
+                calls: vec![],
+                try_catch_blocks: vec![],
+                is_async: false,
+            },
+        );
+
+        // Interface method that declares NotFoundError
+        let interface_method = MethodSignature {
+            type_id: TypeId::new(
+                PathBuf::from("test.ts"),
+                "UserRepository",
+                Span { start: 0, end: 50 },
+            ),
+            method_name: "findById".into(),
+            method_span: Span { start: 10, end: 40 },
+            declared_throws: vec![DeclaredThrow {
+                error_type: "NotFoundError".into(),
+                description: None,
+                span: Span { start: 0, end: 0 },
+            }],
+            is_abstract: false,
+        };
+
+        // Type relation: DatabaseUserRepository implements UserRepository
+        let relation = TypeRelation {
+            child: TypeId::new(
+                PathBuf::from("test.ts"),
+                "DatabaseUserRepository",
+                Span { start: 60, end: 250 },
+            ),
+            parent: TypeId::new(
+                PathBuf::from("test.ts"),
+                "UserRepository",
+                Span { start: 0, end: 50 },
+            ),
+            kind: RelationKind::Implements,
+        };
+
+        let violations = generate_lsp_violations(
+            &signatures,
+            &[interface_method],
+            &[relation],
+            &graph,
+            &mut NoOpTypeResolver,
+        );
+
+        assert_eq!(violations.len(), 1);
+        assert_eq!(violations[0].implementation.name.as_str(), "findById");
+        assert_eq!(violations[0].illegal_throws.len(), 1);
+        assert_eq!(violations[0].illegal_throws[0], ErrorType::Named("DBError".into()));
+    }
+
+    #[test]
+    fn lsp_violation_allows_declared_throw() {
+        let mut signatures: HashMap<FunctionId, FunctionSignature> = HashMap::new();
+        let graph = CallGraph::new();
+
+        // Class method that throws NotFoundError (allowed)
+        let method_id = FunctionId::new(
+            PathBuf::from("test.ts"),
+            "findById",
+            Span { start: 100, end: 200 },
+        );
+
+        signatures.insert(
+            method_id.clone(),
+            FunctionSignature {
+                id: method_id.clone(),
+                name_span: Span { start: 110, end: 118 },
+                declared_throws: vec![],
+                direct_throws: vec![ThrowSite {
+                    location: Span { start: 150, end: 180 },
+                    error_type: ErrorType::Named("NotFoundError".into()),
+                }],
+                calls: vec![],
+                try_catch_blocks: vec![],
+                is_async: false,
+            },
+        );
+
+        // Interface method that declares NotFoundError
+        let interface_method = MethodSignature {
+            type_id: TypeId::new(
+                PathBuf::from("test.ts"),
+                "UserRepository",
+                Span { start: 0, end: 50 },
+            ),
+            method_name: "findById".into(),
+            method_span: Span { start: 10, end: 40 },
+            declared_throws: vec![DeclaredThrow {
+                error_type: "NotFoundError".into(),
+                description: None,
+                span: Span { start: 0, end: 0 },
+            }],
+            is_abstract: false,
+        };
+
+        // Type relation
+        let relation = TypeRelation {
+            child: TypeId::new(
+                PathBuf::from("test.ts"),
+                "ImplementationA",
+                Span { start: 60, end: 250 },
+            ),
+            parent: TypeId::new(
+                PathBuf::from("test.ts"),
+                "UserRepository",
+                Span { start: 0, end: 50 },
+            ),
+            kind: RelationKind::Implements,
+        };
+
+        let violations = generate_lsp_violations(
+            &signatures,
+            &[interface_method],
+            &[relation],
+            &graph,
+            &mut NoOpTypeResolver,
+        );
+
+        assert!(violations.is_empty());
+    }
+
+    #[test]
+    fn lsp_violation_no_throws_declared_means_no_throws_allowed() {
+        let mut signatures: HashMap<FunctionId, FunctionSignature> = HashMap::new();
+        let graph = CallGraph::new();
+
+        // Class method that throws (not allowed when interface declares nothing)
+        let method_id = FunctionId::new(
+            PathBuf::from("test.ts"),
+            "save",
+            Span { start: 100, end: 200 },
+        );
+
+        signatures.insert(
+            method_id.clone(),
+            FunctionSignature {
+                id: method_id.clone(),
+                name_span: Span { start: 110, end: 114 },
+                declared_throws: vec![],
+                direct_throws: vec![ThrowSite {
+                    location: Span { start: 150, end: 180 },
+                    error_type: ErrorType::Named("IOError".into()),
+                }],
+                calls: vec![],
+                try_catch_blocks: vec![],
+                is_async: false,
+            },
+        );
+
+        // Interface method with no @throws declaration
+        let interface_method = MethodSignature {
+            type_id: TypeId::new(
+                PathBuf::from("test.ts"),
+                "UserRepository",
+                Span { start: 0, end: 50 },
+            ),
+            method_name: "save".into(),
+            method_span: Span { start: 10, end: 40 },
+            declared_throws: vec![],
+            is_abstract: false,
+        };
+
+        let relation = TypeRelation {
+            child: TypeId::new(
+                PathBuf::from("test.ts"),
+                "DatabaseUserRepository",
+                Span { start: 60, end: 250 },
+            ),
+            parent: TypeId::new(
+                PathBuf::from("test.ts"),
+                "UserRepository",
+                Span { start: 0, end: 50 },
+            ),
+            kind: RelationKind::Implements,
+        };
+
+        let violations = generate_lsp_violations(
+            &signatures,
+            &[interface_method],
+            &[relation],
+            &graph,
+            &mut NoOpTypeResolver,
+        );
+
+        assert_eq!(violations.len(), 1);
+        assert_eq!(violations[0].illegal_throws[0], ErrorType::Named("IOError".into()));
     }
 }
