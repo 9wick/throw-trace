@@ -14,11 +14,17 @@ pub fn extract_throws_from_jsdoc(comment: &str) -> Vec<(String, Option<String>)>
 
         if rest.starts_with('{') {
             if let Some(end_brace) = rest.find('}') {
-                let type_name = rest[1..end_brace].trim().to_string();
+                let type_content = &rest[1..end_brace];
                 let description = rest[end_brace + 1..].trim();
                 let desc =
                     if description.is_empty() { None } else { Some(description.to_string()) };
-                results.push((type_name, desc));
+
+                for type_part in type_content.split('|') {
+                    let type_name = type_part.trim().to_string();
+                    if !type_name.is_empty() {
+                        results.push((type_name, desc.clone()));
+                    }
+                }
             }
         } else {
             let parts: Vec<&str> = rest.splitn(2, char::is_whitespace).collect();

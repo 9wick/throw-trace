@@ -1,4 +1,6 @@
-use crate::{CallGraph, ErrorType, FunctionId, FunctionSignature, PropagatedThrow, ThrowSite};
+use crate::{
+    CallGraph, ErrorType, FunctionId, FunctionSignature, PropagatedThrow, ThrowSite, TryCatchBlock,
+};
 use std::collections::{HashMap, HashSet};
 
 pub fn compute_propagated_throws<S: std::hash::BuildHasher>(
@@ -32,6 +34,9 @@ fn collect_throws<S: std::hash::BuildHasher>(
     };
 
     for throw_site in &sig.direct_throws {
+        if throw_site.error_type.is_rethrow() && is_in_catch_block(throw_site, sig) {
+            continue;
+        }
         if !is_caught(throw_site, sig) {
             result.push(PropagatedThrow {
                 error_type: throw_site.error_type.clone(),
@@ -49,8 +54,16 @@ fn collect_throws<S: std::hash::BuildHasher>(
 }
 
 fn is_caught(throw_site: &ThrowSite, sig: &FunctionSignature) -> bool {
+    if throw_site.error_type.is_rethrow() {
+        return false;
+    }
+
     for block in &sig.try_catch_blocks {
         if !block.contains(throw_site.location.start) {
+            continue;
+        }
+
+        if catch_has_rethrow(block, sig) {
             continue;
         }
 
@@ -61,4 +74,27 @@ fn is_caught(throw_site: &ThrowSite, sig: &FunctionSignature) -> bool {
         }
     }
     false
+}
+
+fn catch_has_rethrow(block: &TryCatchBlock, sig: &FunctionSignature) -> bool {
+    let Some(catch_span) = &block.catch_span else {
+        return false;
+    };
+
+    sig.direct_throws.iter().any(|throw_site| {
+        throw_site.error_type.is_rethrow()
+            && throw_site.location.start >= catch_span.start
+            && throw_site.location.end <= catch_span.end
+    })
+}
+
+fn is_in_catch_block(throw_site: &ThrowSite, sig: &FunctionSignature) -> bool {
+    sig.try_catch_blocks.iter().any(|block| {
+        if let Some(catch_span) = &block.catch_span {
+            throw_site.location.start >= catch_span.start
+                && throw_site.location.end <= catch_span.end
+        } else {
+            false
+        }
+    })
 }

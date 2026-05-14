@@ -3,6 +3,38 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::path::PathBuf;
 
+/// Checks type compatibility for thrown vs declared types.
+pub trait TypeResolver {
+    /// Check if `thrown_type` is assignable to `declared_type`.
+    fn is_assignable_to(
+        &mut self,
+        file_path: &PathBuf,
+        thrown_type: &str,
+        declared_type: &str,
+    ) -> bool;
+
+    /// Resolve the type of an expression at the given span.
+    fn resolve_type(&mut self, file_path: &PathBuf, span: Span) -> Option<String>;
+}
+
+/// Default resolver that uses simple string equality.
+pub struct NoOpTypeResolver;
+
+impl TypeResolver for NoOpTypeResolver {
+    fn is_assignable_to(
+        &mut self,
+        _file_path: &PathBuf,
+        thrown_type: &str,
+        declared_type: &str,
+    ) -> bool {
+        thrown_type == declared_type
+    }
+
+    fn resolve_type(&mut self, _file_path: &PathBuf, _span: Span) -> Option<String> {
+        None
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Span {
     pub start: u32,
@@ -35,6 +67,7 @@ impl fmt::Display for FunctionId {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ErrorType {
     Named(CompactString),
+    Rethrow(CompactString),
     Unknown,
 }
 
@@ -42,8 +75,13 @@ impl ErrorType {
     pub fn type_name(&self) -> Option<&str> {
         match self {
             Self::Named(name) => Some(name.as_str()),
+            Self::Rethrow(_) => None,
             Self::Unknown => None,
         }
+    }
+
+    pub fn is_rethrow(&self) -> bool {
+        matches!(self, Self::Rethrow(_))
     }
 }
 
@@ -63,6 +101,7 @@ pub struct DeclaredThrow {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CallSite {
     pub callee_name: CompactString,
+    pub callee_span: Span,
     pub location: Span,
 }
 
@@ -82,6 +121,7 @@ impl TryCatchBlock {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FunctionSignature {
     pub id: FunctionId,
+    pub name_span: Span,
     pub declared_throws: Vec<DeclaredThrow>,
     pub direct_throws: Vec<ThrowSite>,
     pub calls: Vec<CallSite>,

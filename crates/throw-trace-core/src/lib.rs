@@ -6,11 +6,11 @@ mod propagation;
 mod types;
 
 pub use call_graph::CallGraph;
-pub use diagnostic::generate_diagnostics;
+pub use diagnostic::generate_diagnostics_with_resolver;
 pub use propagation::compute_propagated_throws;
 pub use types::{
-    CallSite, DeclaredThrow, Diagnostic, ErrorType, FunctionId, FunctionSignature, PropagatedThrow,
-    Span, ThrowSite, TryCatchBlock,
+    CallSite, DeclaredThrow, Diagnostic, ErrorType, FunctionId, FunctionSignature, NoOpTypeResolver,
+    PropagatedThrow, Span, ThrowSite, TryCatchBlock, TypeResolver,
 };
 
 #[cfg(test)]
@@ -70,8 +70,11 @@ mod tests {
 
     #[test]
     fn call_site_creation() {
-        let call =
-            CallSite { callee_name: "validate".into(), location: Span { start: 200, end: 220 } };
+        let call = CallSite {
+            callee_name: "validate".into(),
+            callee_span: Span { start: 200, end: 208 },
+            location: Span { start: 200, end: 220 },
+        };
         assert_eq!(call.callee_name.as_str(), "validate");
     }
 
@@ -94,6 +97,7 @@ mod tests {
                 "testFn",
                 Span { start: 0, end: 100 },
             ),
+            name_span: Span { start: 9, end: 15 },
             declared_throws: vec![],
             direct_throws: vec![],
             calls: vec![],
@@ -183,6 +187,7 @@ mod tests {
         let id = FunctionId::new(PathBuf::from("a.ts"), "foo", Span { start: 0, end: 50 });
         let sig = FunctionSignature {
             id: id.clone(),
+            name_span: Span { start: 9, end: 12 },
             declared_throws: vec![],
             direct_throws: vec![ThrowSite {
                 location: Span { start: 10, end: 30 },
@@ -209,6 +214,7 @@ mod tests {
             id.clone(),
             FunctionSignature {
                 id: id.clone(),
+                name_span: Span { start: 9, end: 12 },
                 declared_throws: vec![],
                 direct_throws: vec![ThrowSite {
                     location: Span { start: 10, end: 30 },
@@ -221,7 +227,8 @@ mod tests {
         );
 
         let graph = CallGraph::new();
-        let diagnostics = generate_diagnostics(&signatures, &graph);
+        let diagnostics =
+            generate_diagnostics_with_resolver(&signatures, &graph, &mut NoOpTypeResolver);
         assert_eq!(diagnostics.len(), 1);
         assert_eq!(diagnostics[0].missing_throws.len(), 1);
     }
@@ -235,6 +242,7 @@ mod tests {
             id.clone(),
             FunctionSignature {
                 id: id.clone(),
+                name_span: Span { start: 9, end: 12 },
                 declared_throws: vec![DeclaredThrow {
                     error_type: "MyError".into(),
                     description: None,
@@ -251,7 +259,8 @@ mod tests {
         );
 
         let graph = CallGraph::new();
-        let diagnostics = generate_diagnostics(&signatures, &graph);
+        let diagnostics =
+            generate_diagnostics_with_resolver(&signatures, &graph, &mut NoOpTypeResolver);
         assert!(diagnostics.is_empty());
     }
 
@@ -267,6 +276,7 @@ mod tests {
             inner.clone(),
             FunctionSignature {
                 id: inner.clone(),
+                name_span: Span { start: 9, end: 14 },
                 declared_throws: vec![],
                 direct_throws: vec![ThrowSite {
                     location: Span { start: 10, end: 30 },
@@ -282,10 +292,12 @@ mod tests {
             outer.clone(),
             FunctionSignature {
                 id: outer.clone(),
+                name_span: Span { start: 9, end: 14 },
                 declared_throws: vec![],
                 direct_throws: vec![],
                 calls: vec![CallSite {
                     callee_name: "inner".into(),
+                    callee_span: Span { start: 50, end: 55 },
                     location: Span { start: 50, end: 60 },
                 }],
                 try_catch_blocks: vec![],
@@ -300,5 +312,81 @@ mod tests {
         let propagated = compute_propagated_throws(&outer, &signatures, &graph);
         assert_eq!(propagated.len(), 1);
         assert_eq!(propagated[0].error_type, ErrorType::Named("InnerError".into()));
+    }
+
+    #[test]
+    fn rethrow_in_catch_propagates_original() {
+        let mut signatures: HashMap<FunctionId, FunctionSignature> = HashMap::new();
+        let graph = CallGraph::new();
+
+        let func = FunctionId::new(PathBuf::from("a.ts"), "foo", Span { start: 0, end: 200 });
+
+        signatures.insert(
+            func.clone(),
+            FunctionSignature {
+                id: func.clone(),
+                name_span: Span { start: 9, end: 12 },
+                declared_throws: vec![],
+                direct_throws: vec![
+                    ThrowSite {
+                        location: Span { start: 20, end: 50 },
+                        error_type: ErrorType::Named("SomeError".into()),
+                    },
+                    ThrowSite {
+                        location: Span { start: 120, end: 130 },
+                        error_type: ErrorType::Rethrow("e".into()),
+                    },
+                ],
+                calls: vec![],
+                try_catch_blocks: vec![TryCatchBlock {
+                    try_span: Span { start: 10, end: 100 },
+                    catch_span: Some(Span { start: 100, end: 150 }),
+                    caught_types: vec!["SomeError".into()],
+                }],
+                is_async: false,
+            },
+        );
+
+        let propagated = compute_propagated_throws(&func, &signatures, &graph);
+        assert_eq!(propagated.len(), 1);
+        assert_eq!(propagated[0].error_type, ErrorType::Named("SomeError".into()));
+    }
+
+    #[test]
+    fn new_throw_in_catch_propagates() {
+        let mut signatures: HashMap<FunctionId, FunctionSignature> = HashMap::new();
+        let graph = CallGraph::new();
+
+        let func = FunctionId::new(PathBuf::from("a.ts"), "foo", Span { start: 0, end: 200 });
+
+        signatures.insert(
+            func.clone(),
+            FunctionSignature {
+                id: func.clone(),
+                name_span: Span { start: 9, end: 12 },
+                declared_throws: vec![],
+                direct_throws: vec![
+                    ThrowSite {
+                        location: Span { start: 20, end: 50 },
+                        error_type: ErrorType::Named("OriginalError".into()),
+                    },
+                    ThrowSite {
+                        location: Span { start: 120, end: 150 },
+                        error_type: ErrorType::Named("WrappedError".into()),
+                    },
+                ],
+                calls: vec![],
+                try_catch_blocks: vec![TryCatchBlock {
+                    try_span: Span { start: 10, end: 100 },
+                    catch_span: Some(Span { start: 100, end: 180 }),
+                    caught_types: vec!["OriginalError".into()],
+                }],
+                is_async: false,
+            },
+        );
+
+        let propagated = compute_propagated_throws(&func, &signatures, &graph);
+        assert_eq!(propagated.len(), 1);
+        assert_eq!(propagated[0].error_type, ErrorType::Named("WrappedError".into()));
     }
 }

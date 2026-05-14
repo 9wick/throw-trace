@@ -5,12 +5,14 @@ mod jsdoc;
 mod parser;
 mod throw_analyzer;
 mod try_catch;
+pub mod tsserver;
 
 pub use extract::extract_functions;
 pub use jsdoc::extract_throws_from_jsdoc;
 pub use parser::parse_source;
-pub use throw_analyzer::analyze_throw_expr;
+pub use throw_analyzer::{analyze_throw_expr, analyze_throw_expr_with_catch_params};
 pub use try_catch::extract_try_catch_blocks;
+pub use tsserver::{byte_offset_to_line_col, TsServer, TsServerError, TsServerTypeResolver};
 
 #[cfg(test)]
 mod tests {
@@ -108,6 +110,27 @@ mod tests {
     }
 
     #[test]
+    fn extract_throws_union_type() {
+        let comment = "/**\n * @throws {ValidationError | NetworkError} When something fails\n */";
+        let throws = extract_throws_from_jsdoc(comment);
+        assert_eq!(throws.len(), 2);
+        assert_eq!(throws[0].0, "ValidationError");
+        assert_eq!(throws[0].1.as_deref(), Some("When something fails"));
+        assert_eq!(throws[1].0, "NetworkError");
+        assert_eq!(throws[1].1.as_deref(), Some("When something fails"));
+    }
+
+    #[test]
+    fn extract_throws_union_type_three() {
+        let comment = "/**\n * @throws {A | B | C}\n */";
+        let throws = extract_throws_from_jsdoc(comment);
+        assert_eq!(throws.len(), 3);
+        assert_eq!(throws[0].0, "A");
+        assert_eq!(throws[1].0, "B");
+        assert_eq!(throws[2].0, "C");
+    }
+
+    #[test]
     fn analyze_throw_new_error() {
         let source = "throw new ValidationError('msg')";
         let result = analyze_throw_expr(source);
@@ -129,9 +152,28 @@ mod tests {
     }
 
     #[test]
-    fn analyze_throw_variable() {
+    fn analyze_throw_variable_is_unknown() {
+        // throw variable (not catch param) should be Unknown
         let source = "throw err";
         let result = analyze_throw_expr(source);
+        assert_eq!(result, ErrorType::Unknown);
+    }
+
+    #[test]
+    fn analyze_throw_catch_param_is_rethrow() {
+        // throw catch param should be Rethrow
+        let source = "throw e";
+        let catch_params = vec!["e".to_string()];
+        let result = analyze_throw_expr_with_catch_params(source, &catch_params);
+        assert_eq!(result, ErrorType::Rethrow("e".into()));
+    }
+
+    #[test]
+    fn analyze_throw_non_catch_param_is_unknown() {
+        // throw variable that is NOT a catch param should be Unknown
+        let source = "throw err";
+        let catch_params = vec!["e".to_string()];
+        let result = analyze_throw_expr_with_catch_params(source, &catch_params);
         assert_eq!(result, ErrorType::Unknown);
     }
 
@@ -179,5 +221,70 @@ try {
         let blocks = extract_try_catch_blocks(source);
         assert_eq!(blocks.len(), 1);
         assert!(blocks[0].catch_span.is_none());
+    }
+
+    #[test]
+    fn rethrow_in_catch_is_rethrow() {
+        let source = r#"
+function foo() {
+    try {
+        bar();
+    } catch (e) {
+        throw e;
+    }
+}
+"#;
+        let file_path = PathBuf::from("test.ts");
+        let sigs = extract_functions(source, &file_path).unwrap();
+        assert_eq!(sigs.len(), 1);
+        assert_eq!(sigs[0].direct_throws.len(), 1);
+        assert_eq!(sigs[0].direct_throws[0].error_type, ErrorType::Rethrow("e".into()));
+    }
+
+    #[test]
+    fn throw_variable_outside_catch_is_unknown() {
+        let source = r#"
+function foo() {
+    const err = getError();
+    throw err;
+}
+"#;
+        let file_path = PathBuf::from("test.ts");
+        let sigs = extract_functions(source, &file_path).unwrap();
+        assert_eq!(sigs.len(), 1);
+        assert_eq!(sigs[0].direct_throws.len(), 1);
+        assert_eq!(sigs[0].direct_throws[0].error_type, ErrorType::Unknown);
+    }
+
+    #[test]
+    fn throw_typed_variable_uses_annotation() {
+        let source = r#"
+function foo() {
+    const err: SomeError = getError();
+    throw err;
+}
+"#;
+        let file_path = PathBuf::from("test.ts");
+        let sigs = extract_functions(source, &file_path).unwrap();
+        assert_eq!(sigs.len(), 1);
+        assert_eq!(sigs[0].direct_throws.len(), 1);
+        assert_eq!(sigs[0].direct_throws[0].error_type, ErrorType::Named("SomeError".into()));
+    }
+
+    #[test]
+    fn throw_union_typed_variable_extracts_all() {
+        let source = r#"
+function foo() {
+    const err: ErrorA | ErrorB = getError();
+    throw err;
+}
+"#;
+        let file_path = PathBuf::from("test.ts");
+        let sigs = extract_functions(source, &file_path).unwrap();
+        assert_eq!(sigs.len(), 1);
+        // Union type creates multiple throw sites
+        assert_eq!(sigs[0].direct_throws.len(), 2);
+        assert_eq!(sigs[0].direct_throws[0].error_type, ErrorType::Named("ErrorA".into()));
+        assert_eq!(sigs[0].direct_throws[1].error_type, ErrorType::Named("ErrorB".into()));
     }
 }
