@@ -179,13 +179,13 @@ mod tests {
 
     #[test]
     fn extract_try_catch_simple() {
-        let source = r#"
+        let source = r"
 try {
     validate();
 } catch (e) {
     console.log(e);
 }
-"#;
+";
         let blocks = extract_try_catch_blocks(source);
         assert_eq!(blocks.len(), 1);
         assert!(blocks[0].catch_span.is_some());
@@ -193,7 +193,7 @@ try {
 
     #[test]
     fn extract_try_catch_with_instanceof() {
-        let source = r#"
+        let source = r"
 try {
     validate();
 } catch (e) {
@@ -202,7 +202,7 @@ try {
     }
     throw e;
 }
-"#;
+";
         let blocks = extract_try_catch_blocks(source);
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].caught_types.len(), 1);
@@ -211,13 +211,13 @@ try {
 
     #[test]
     fn extract_try_catch_no_catch() {
-        let source = r#"
+        let source = r"
 try {
     validate();
 } finally {
     cleanup();
 }
-"#;
+";
         let blocks = extract_try_catch_blocks(source);
         assert_eq!(blocks.len(), 1);
         assert!(blocks[0].catch_span.is_none());
@@ -225,7 +225,7 @@ try {
 
     #[test]
     fn rethrow_in_catch_is_rethrow() {
-        let source = r#"
+        let source = r"
 function foo() {
     try {
         bar();
@@ -233,7 +233,7 @@ function foo() {
         throw e;
     }
 }
-"#;
+";
         let file_path = PathBuf::from("test.ts");
         let sigs = extract_functions(source, &file_path).unwrap();
         assert_eq!(sigs.len(), 1);
@@ -243,12 +243,12 @@ function foo() {
 
     #[test]
     fn throw_variable_outside_catch_is_unknown() {
-        let source = r#"
+        let source = r"
 function foo() {
     const err = getError();
     throw err;
 }
-"#;
+";
         let file_path = PathBuf::from("test.ts");
         let sigs = extract_functions(source, &file_path).unwrap();
         assert_eq!(sigs.len(), 1);
@@ -258,12 +258,12 @@ function foo() {
 
     #[test]
     fn throw_typed_variable_uses_annotation() {
-        let source = r#"
+        let source = r"
 function foo() {
     const err: SomeError = getError();
     throw err;
 }
-"#;
+";
         let file_path = PathBuf::from("test.ts");
         let sigs = extract_functions(source, &file_path).unwrap();
         assert_eq!(sigs.len(), 1);
@@ -273,12 +273,12 @@ function foo() {
 
     #[test]
     fn throw_union_typed_variable_extracts_all() {
-        let source = r#"
+        let source = r"
 function foo() {
     const err: ErrorA | ErrorB = getError();
     throw err;
 }
-"#;
+";
         let file_path = PathBuf::from("test.ts");
         let sigs = extract_functions(source, &file_path).unwrap();
         assert_eq!(sigs.len(), 1);
@@ -290,14 +290,14 @@ function foo() {
 
     #[test]
     fn extract_interface_with_method_throws() {
-        let source = r#"
+        let source = r"
 interface UserRepository {
     /**
      * @throws {NotFoundError}
      */
     findById(id: string): User;
 }
-"#;
+";
         let file_path = PathBuf::from("test.ts");
         let result = extract_all(source, &file_path).unwrap();
         assert_eq!(result.method_signatures.len(), 1);
@@ -311,10 +311,10 @@ interface UserRepository {
 
     #[test]
     fn extract_class_implements_interface() {
-        let source = r#"
+        let source = r"
 interface Repository {}
 class UserRepository implements Repository {}
-"#;
+";
         let file_path = PathBuf::from("test.ts");
         let result = extract_all(source, &file_path).unwrap();
         assert_eq!(result.type_relations.len(), 1);
@@ -325,10 +325,10 @@ class UserRepository implements Repository {}
 
     #[test]
     fn extract_class_extends_class() {
-        let source = r#"
+        let source = r"
 class BaseService {}
 class UserService extends BaseService {}
-"#;
+";
         let file_path = PathBuf::from("test.ts");
         let result = extract_all(source, &file_path).unwrap();
         assert_eq!(result.type_relations.len(), 1);
@@ -339,14 +339,14 @@ class UserService extends BaseService {}
 
     #[test]
     fn extract_abstract_class_method() {
-        let source = r#"
+        let source = r"
 abstract class BaseRepository {
     /**
      * @throws {NotFoundError}
      */
     abstract findById(id: string): User;
 }
-"#;
+";
         let file_path = PathBuf::from("test.ts");
         let result = extract_all(source, &file_path).unwrap();
         assert_eq!(result.method_signatures.len(), 1);

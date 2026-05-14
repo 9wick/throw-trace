@@ -157,10 +157,12 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::similar_names)]
     fn call_graph_add_call() {
         let mut graph = CallGraph::new();
-        let caller = FunctionId::new(PathBuf::from("a.ts"), "foo", Span { start: 0, end: 50 });
-        let callee = FunctionId::new(PathBuf::from("b.ts"), "bar", Span { start: 0, end: 50 });
+        let span = Span { start: 0, end: 50 };
+        let caller = FunctionId::new(PathBuf::from("a.ts"), "foo", span);
+        let callee = FunctionId::new(PathBuf::from("b.ts"), "bar", span);
         graph.add_function(caller.clone());
         graph.add_function(callee.clone());
         graph.add_call(&caller, &callee);

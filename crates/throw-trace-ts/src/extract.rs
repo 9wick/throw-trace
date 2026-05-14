@@ -226,19 +226,17 @@ impl<'a> FunctionExtractor<'a> {
         );
 
         // Extract extends clause
-        if let Some(super_class) = &class.super_class {
-            if let Expression::Identifier(id) = super_class {
-                let parent_id = TypeId::new(
-                    self.file_path.to_path_buf(),
-                    id.name.as_str(),
-                    Span { start: id.span.start, end: id.span.end },
-                );
-                self.type_relations.push(TypeRelation {
-                    child: type_id.clone(),
-                    parent: parent_id,
-                    kind: RelationKind::Extends,
-                });
-            }
+        if let Some(Expression::Identifier(id)) = &class.super_class {
+            let parent_id = TypeId::new(
+                self.file_path.to_path_buf(),
+                id.name.as_str(),
+                Span { start: id.span.start, end: id.span.end },
+            );
+            self.type_relations.push(TypeRelation {
+                child: type_id.clone(),
+                parent: parent_id,
+                kind: RelationKind::Extends,
+            });
         }
 
         // Extract implements clauses
@@ -499,18 +497,12 @@ impl<'a> Visit<'a> for FunctionExtractor<'a> {
             return;
         }
 
-        let method_name = match &method.key {
-            oxc_ast::ast::PropertyKey::StaticIdentifier(id) => id.name.as_str(),
-            _ => {
-                walk::walk_method_definition(self, method);
-                return;
-            }
+        let oxc_ast::ast::PropertyKey::StaticIdentifier(key_id) = &method.key else {
+            walk::walk_method_definition(self, method);
+            return;
         };
-
-        let name_span = match &method.key {
-            oxc_ast::ast::PropertyKey::StaticIdentifier(id) => id.span,
-            _ => method.span,
-        };
+        let method_name = key_id.name.as_str();
+        let name_span = key_id.span;
 
         let comment = preceding_jsdoc(self.source, method.span.start);
         let is_async = method.value.r#async;
