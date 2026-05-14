@@ -28,7 +28,7 @@ pub struct Analyzer {
     entry_files: HashSet<PathBuf>,
     analyzed_files: HashSet<PathBuf>,
     config: AnalyzerConfig,
-    /// Maps (caller_file, callee_span) -> (def_file, def_line) for resolved definitions
+    /// Maps `(caller_file, callee_span)` -> `(def_file, def_line)` for resolved definitions
     resolved_calls: HashMap<(PathBuf, Span), (PathBuf, u32)>,
 }
 
@@ -58,7 +58,7 @@ impl Analyzer {
         }
 
         if self.config.cross_file {
-            self.resolve_cross_file_calls()?;
+            self.resolve_cross_file_calls();
         }
 
         self.build_call_graph();
@@ -89,12 +89,10 @@ impl Analyzer {
         Ok(())
     }
 
-    fn resolve_cross_file_calls(&mut self) -> Result<()> {
-        let ts_server = TsServer::new();
-        if ts_server.is_err() {
-            return Ok(());
-        }
-        let mut ts_server = ts_server.unwrap();
+    fn resolve_cross_file_calls(&mut self) {
+        let Ok(mut ts_server) = TsServer::new() else {
+            return;
+        };
 
         let mut pending: VecDeque<PathBuf> = VecDeque::new();
         let mut depth = 0;
@@ -104,13 +102,13 @@ impl Analyzer {
                 break;
             }
 
-            let new_files = self.collect_definition_targets(&mut ts_server)?;
+            let new_files = self.collect_definition_targets(&mut ts_server);
             if new_files.is_empty() {
                 break;
             }
 
             for file in new_files {
-                if !self.analyzed_files.contains(&file) && self.should_analyze(&file) {
+                if !self.analyzed_files.contains(&file) && Self::should_analyze(&file) {
                     pending.push_back(file);
                 }
             }
@@ -124,11 +122,9 @@ impl Analyzer {
 
             depth += 1;
         }
-
-        Ok(())
     }
 
-    fn collect_definition_targets(&mut self, ts_server: &mut TsServer) -> Result<HashSet<PathBuf>> {
+    fn collect_definition_targets(&mut self, ts_server: &mut TsServer) -> HashSet<PathBuf> {
         let mut targets = HashSet::new();
 
         let call_infos: Vec<(PathBuf, Span)> = self
@@ -144,9 +140,8 @@ impl Analyzer {
                 continue;
             }
 
-            let source = match fs::read_to_string(&file_path) {
-                Ok(s) => s,
-                Err(_) => continue,
+            let Ok(source) = fs::read_to_string(&file_path) else {
+                continue;
             };
 
             let _ = ts_server.open_file(&file_path);
@@ -170,10 +165,10 @@ impl Analyzer {
             }
         }
 
-        Ok(targets)
+        targets
     }
 
-    fn should_analyze(&self, file_path: &Path) -> bool {
+    fn should_analyze(file_path: &Path) -> bool {
         !file_path.components().any(|c| c.as_os_str() == "node_modules")
     }
 
@@ -195,7 +190,9 @@ impl Analyzer {
                 sig.calls.iter().filter_map(|call| {
                     let key = (sig.id.file_path.clone(), call.callee_span);
                     if let Some((def_file, def_line)) = self.resolved_calls.get(&key) {
-                        if let Some(callee_id) = sig_by_file_and_line.get(&(def_file.clone(), *def_line)) {
+                        if let Some(callee_id) =
+                            sig_by_file_and_line.get(&(def_file.clone(), *def_line))
+                        {
                             return Some((sig.id.clone(), (*callee_id).clone()));
                         }
                     }

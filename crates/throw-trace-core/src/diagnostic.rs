@@ -36,7 +36,7 @@ fn find_missing_declarations<R: TypeResolver>(
         .filter_map(|p| {
             let (is_decl, resolved_type) = is_declared_with_resolution(
                 &p.error_type,
-                &p.origin.location,
+                p.origin.location,
                 &sig.id.file_path,
                 &declared_types,
                 resolver,
@@ -56,26 +56,26 @@ fn find_missing_declarations<R: TypeResolver>(
 
 fn is_declared_with_resolution<R: TypeResolver>(
     error_type: &ErrorType,
-    throw_span: &crate::Span,
-    file_path: &std::path::PathBuf,
+    throw_span: crate::Span,
+    file_path: &std::path::Path,
     declared_types: &[&str],
-    resolver: &mut R,
+    type_resolver: &mut R,
 ) -> (bool, Option<String>) {
     match error_type {
         ErrorType::Named(thrown_type) => {
             let is_decl = declared_types
                 .iter()
-                .any(|declared| resolver.is_assignable_to(file_path, thrown_type, declared));
+                .any(|declared| type_resolver.is_assignable_to(file_path, thrown_type, declared));
             (is_decl, None)
         }
         ErrorType::Unknown => {
-            let Some(resolved) = resolver.resolve_type(file_path, *throw_span) else {
+            let Some(resolved_type) = type_resolver.resolve_type(file_path, throw_span) else {
                 return (false, None);
             };
-            let is_decl = declared_types
-                .iter()
-                .any(|declared| resolver.is_assignable_to(file_path, &resolved, declared));
-            (is_decl, Some(resolved))
+            let is_decl = declared_types.iter().any(|declared| {
+                type_resolver.is_assignable_to(file_path, &resolved_type, declared)
+            });
+            (is_decl, Some(resolved_type))
         }
         ErrorType::Rethrow(_) => (false, None),
     }
@@ -117,7 +117,8 @@ pub fn generate_lsp_violations<S: std::hash::BuildHasher, R: TypeResolver>(
             let propagated = compute_propagated_throws(func_id, signatures, graph);
 
             // Check each propagated throw against parent's declared throws
-            let illegal = find_illegal_throws(&propagated, parent_method, resolver, &sig.id.file_path);
+            let illegal =
+                find_illegal_throws(&propagated, parent_method, resolver, &sig.id.file_path);
 
             if !illegal.is_empty() {
                 violations.push(LspViolation {
@@ -135,10 +136,7 @@ pub fn generate_lsp_violations<S: std::hash::BuildHasher, R: TypeResolver>(
 fn build_parent_lookup(relations: &[TypeRelation]) -> HashMap<String, Vec<String>> {
     let mut lookup: HashMap<String, Vec<String>> = HashMap::new();
     for rel in relations {
-        lookup
-            .entry(rel.child.name.to_string())
-            .or_default()
-            .push(rel.parent.name.to_string());
+        lookup.entry(rel.child.name.to_string()).or_default().push(rel.parent.name.to_string());
     }
     lookup
 }
@@ -151,7 +149,7 @@ fn extract_class_name_from_signature<S: std::hash::BuildHasher>(
     func_id: &FunctionId,
     signatures: &HashMap<FunctionId, FunctionSignature, S>,
 ) -> Option<String> {
-    signatures.get(func_id).and_then(|sig| sig.class_name.as_ref().map(|s| s.to_string()))
+    signatures.get(func_id).and_then(|sig| sig.class_name.as_ref().map(ToString::to_string))
 }
 
 fn get_all_parent_types(type_name: &str, lookup: &HashMap<String, Vec<String>>) -> Vec<String> {
@@ -180,7 +178,7 @@ fn find_illegal_throws<R: TypeResolver>(
     propagated: &[PropagatedThrow],
     parent_method: &MethodSignature,
     resolver: &mut R,
-    file_path: &std::path::PathBuf,
+    file_path: &std::path::Path,
 ) -> Vec<ErrorType> {
     let declared_types: Vec<&str> =
         parent_method.declared_throws.iter().map(|d| d.error_type.as_str()).collect();
@@ -190,9 +188,9 @@ fn find_illegal_throws<R: TypeResolver>(
         .filter_map(|p| {
             match &p.error_type {
                 ErrorType::Named(thrown_type) => {
-                    let is_allowed = declared_types
-                        .iter()
-                        .any(|declared| resolver.is_assignable_to(file_path, thrown_type, declared));
+                    let is_allowed = declared_types.iter().any(|declared| {
+                        resolver.is_assignable_to(file_path, thrown_type, declared)
+                    });
                     if is_allowed {
                         None
                     } else {

@@ -40,7 +40,6 @@ fn check_nonexistent_path() {
         .stdout(predicate::str::contains("No TypeScript files found"));
 }
 
-
 #[test]
 #[ignore = "requires tsserver installed"]
 fn check_type_alias_with_resolver_passes() {
@@ -57,11 +56,7 @@ fn check_type_alias_with_resolver_passes() {
 fn check_declared_type_alias_resolves() {
     let mut cmd = Command::cargo_bin("throw-trace").unwrap();
     cmd.current_dir(workspace_root())
-        .args([
-            "check",
-            "tests/fixtures/type_alias_declared.ts",
-            "tests/fixtures/errors.ts",
-        ])
+        .args(["check", "tests/fixtures/type_alias_declared.ts", "tests/fixtures/errors.ts"])
         .assert()
         .success()
         .stdout(predicate::str::contains("No issues found"));

@@ -1,20 +1,20 @@
 use compact_str::CompactString;
 use serde::{Deserialize, Serialize};
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Checks type compatibility for thrown vs declared types.
 pub trait TypeResolver {
     /// Check if `thrown_type` is assignable to `declared_type`.
     fn is_assignable_to(
         &mut self,
-        file_path: &PathBuf,
+        file_path: &Path,
         thrown_type: &str,
         declared_type: &str,
     ) -> bool;
 
     /// Resolve the type of an expression at the given span.
-    fn resolve_type(&mut self, file_path: &PathBuf, span: Span) -> Option<String>;
+    fn resolve_type(&mut self, file_path: &Path, span: Span) -> Option<String>;
 }
 
 /// Default resolver that uses simple string equality.
@@ -23,14 +23,14 @@ pub struct NoOpTypeResolver;
 impl TypeResolver for NoOpTypeResolver {
     fn is_assignable_to(
         &mut self,
-        _file_path: &PathBuf,
+        _file_path: &Path,
         thrown_type: &str,
         declared_type: &str,
     ) -> bool {
         thrown_type == declared_type
     }
 
-    fn resolve_type(&mut self, _file_path: &PathBuf, _span: Span) -> Option<String> {
+    fn resolve_type(&mut self, _file_path: &Path, _span: Span) -> Option<String> {
         None
     }
 }
@@ -75,8 +75,7 @@ impl ErrorType {
     pub fn type_name(&self) -> Option<&str> {
         match self {
             Self::Named(name) => Some(name.as_str()),
-            Self::Rethrow(_) => None,
-            Self::Unknown => None,
+            Self::Rethrow(_) | Self::Unknown => None,
         }
     }
 

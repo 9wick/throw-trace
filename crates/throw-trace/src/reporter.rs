@@ -117,7 +117,9 @@ fn report_text(
             writeln!(
                 stdout,
                 "   | {} is not declared in {}.{}",
-                type_name, violation.parent_method.type_id.name, violation.parent_method.method_name
+                type_name,
+                violation.parent_method.type_id.name,
+                violation.parent_method.method_name
             )?;
         }
 

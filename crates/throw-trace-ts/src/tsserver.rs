@@ -240,7 +240,10 @@ impl TsServer {
     }
 
     /// Get semantic diagnostics (type errors) for a file.
-    pub fn semantic_diagnostics(&mut self, file_path: &Path) -> Result<Vec<serde_json::Value>, TsServerError> {
+    pub fn semantic_diagnostics(
+        &mut self,
+        file_path: &Path,
+    ) -> Result<Vec<serde_json::Value>, TsServerError> {
         let abs_path = file_path.canonicalize().unwrap_or_else(|_| file_path.to_path_buf());
         let seq = self.send_request(
             "semanticDiagnosticsSync",
@@ -262,22 +265,15 @@ impl TsServer {
     /// Reload file from disk (discard virtual changes).
     pub fn reload_file(&mut self, file_path: &Path) -> Result<(), TsServerError> {
         let abs_path = file_path.canonicalize().unwrap_or_else(|_| file_path.to_path_buf());
-        let seq = self.send_request(
-            "reloadProjects",
-            serde_json::json!({}),
-        )?;
+        let seq = self.send_request("reloadProjects", serde_json::json!({}))?;
         self.read_response(seq)?;
 
-        let seq = self.send_request(
-            "close",
-            serde_json::json!({ "file": abs_path.to_string_lossy() }),
-        )?;
+        let seq =
+            self.send_request("close", serde_json::json!({ "file": abs_path.to_string_lossy() }))?;
         self.read_response(seq)?;
 
-        let seq = self.send_request(
-            "open",
-            serde_json::json!({ "file": abs_path.to_string_lossy() }),
-        )?;
+        let seq =
+            self.send_request("open", serde_json::json!({ "file": abs_path.to_string_lossy() }))?;
         self.read_response(seq)?;
         Ok(())
     }
@@ -314,15 +310,15 @@ impl TsServerTypeResolver {
         Ok(())
     }
 
+    #[allow(clippy::cast_possible_truncation)]
     fn count_lines(file_path: &Path) -> u32 {
-        std::fs::read_to_string(file_path)
-            .map(|s| s.lines().count() as u32)
-            .unwrap_or(1)
+        std::fs::read_to_string(file_path).map(|s| s.lines().count() as u32).unwrap_or(1)
     }
 }
 
 /// Convert byte offset to (line, column) for tsserver.
 /// Line and column are 1-based.
+#[allow(clippy::cast_possible_truncation)]
 pub fn byte_offset_to_line_col(source: &str, offset: u32) -> (u32, u32) {
     let mut line = 1u32;
     let mut col = 1u32;
@@ -344,7 +340,7 @@ pub fn byte_offset_to_line_col(source: &str, offset: u32) -> (u32, u32) {
 impl throw_trace_core::TypeResolver for TsServerTypeResolver {
     fn is_assignable_to(
         &mut self,
-        file_path: &std::path::PathBuf,
+        file_path: &std::path::Path,
         thrown_type: &str,
         declared_type: &str,
     ) -> bool {
@@ -380,9 +376,10 @@ impl throw_trace_core::TypeResolver for TsServerTypeResolver {
         result
     }
 
+    #[allow(clippy::cast_possible_truncation)]
     fn resolve_type(
         &mut self,
-        file_path: &std::path::PathBuf,
+        file_path: &std::path::Path,
         span: throw_trace_core::Span,
     ) -> Option<String> {
         self.ensure_file_open(file_path).ok()?;
@@ -533,11 +530,7 @@ mod tests {
         assert!(!spans.is_empty(), "Should return at least one definition");
 
         let def = &spans[0];
-        assert!(
-            def.file.ends_with("a.ts"),
-            "Definition should point to a.ts, got: {}",
-            def.file
-        );
+        assert!(def.file.ends_with("a.ts"), "Definition should point to a.ts, got: {}", def.file);
     }
 
     #[test]
