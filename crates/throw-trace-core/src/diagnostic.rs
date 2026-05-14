@@ -1,6 +1,6 @@
 use crate::{
     compute_propagated_throws, CallGraph, Diagnostic, ErrorType, FunctionId, FunctionSignature,
-    PropagatedThrow, TypeResolver,
+    LspViolation, MethodSignature, PropagatedThrow, TypeRelation, TypeResolver,
 };
 use std::collections::HashMap;
 
@@ -79,4 +79,135 @@ fn is_declared_with_resolution<R: TypeResolver>(
         }
         ErrorType::Rethrow(_) => (false, None),
     }
+}
+
+pub fn generate_lsp_violations<S: std::hash::BuildHasher, R: TypeResolver>(
+    signatures: &HashMap<FunctionId, FunctionSignature, S>,
+    method_signatures: &[MethodSignature],
+    type_relations: &[TypeRelation],
+    graph: &CallGraph,
+    resolver: &mut R,
+) -> Vec<LspViolation> {
+    let mut violations = Vec::new();
+
+    // Build lookup: type name -> parent types
+    let parent_lookup = build_parent_lookup(type_relations);
+
+    // Build lookup: (type name, method name) -> method signature
+    let method_lookup = build_method_lookup(method_signatures);
+
+    for (func_id, sig) in signatures {
+        // Find the class this function belongs to
+        let class_name = extract_class_name_from_signature(func_id, signatures);
+        let Some(class_name) = class_name else {
+            continue;
+        };
+
+        // Get all parent types (direct + transitive)
+        let parent_types = get_all_parent_types(&class_name, &parent_lookup);
+
+        // For each parent type, check if there's a method with the same name
+        for parent_type in &parent_types {
+            let key = (parent_type.as_str(), func_id.name.as_str());
+            let Some(parent_method) = method_lookup.get(&key) else {
+                continue;
+            };
+
+            // Get propagated throws for this function
+            let propagated = compute_propagated_throws(func_id, signatures, graph);
+
+            // Check each propagated throw against parent's declared throws
+            let illegal = find_illegal_throws(&propagated, parent_method, resolver, &sig.id.file_path);
+
+            if !illegal.is_empty() {
+                violations.push(LspViolation {
+                    implementation: func_id.clone(),
+                    parent_method: (*parent_method).clone(),
+                    illegal_throws: illegal,
+                });
+            }
+        }
+    }
+
+    violations
+}
+
+fn build_parent_lookup(relations: &[TypeRelation]) -> HashMap<String, Vec<String>> {
+    let mut lookup: HashMap<String, Vec<String>> = HashMap::new();
+    for rel in relations {
+        lookup
+            .entry(rel.child.name.to_string())
+            .or_default()
+            .push(rel.parent.name.to_string());
+    }
+    lookup
+}
+
+fn build_method_lookup(methods: &[MethodSignature]) -> HashMap<(&str, &str), &MethodSignature> {
+    methods.iter().map(|m| ((m.type_id.name.as_str(), m.method_name.as_str()), m)).collect()
+}
+
+fn extract_class_name_from_signature<S: std::hash::BuildHasher>(
+    func_id: &FunctionId,
+    signatures: &HashMap<FunctionId, FunctionSignature, S>,
+) -> Option<String> {
+    signatures.get(func_id).and_then(|sig| sig.class_name.as_ref().map(|s| s.to_string()))
+}
+
+fn get_all_parent_types(type_name: &str, lookup: &HashMap<String, Vec<String>>) -> Vec<String> {
+    let mut result = Vec::new();
+    let mut visited = std::collections::HashSet::new();
+    let mut queue = vec![type_name.to_string()];
+
+    while let Some(current) = queue.pop() {
+        if visited.contains(&current) {
+            continue;
+        }
+        visited.insert(current.clone());
+
+        if let Some(parents) = lookup.get(&current) {
+            for parent in parents {
+                result.push(parent.clone());
+                queue.push(parent.clone());
+            }
+        }
+    }
+
+    result
+}
+
+fn find_illegal_throws<R: TypeResolver>(
+    propagated: &[PropagatedThrow],
+    parent_method: &MethodSignature,
+    resolver: &mut R,
+    file_path: &std::path::PathBuf,
+) -> Vec<ErrorType> {
+    let declared_types: Vec<&str> =
+        parent_method.declared_throws.iter().map(|d| d.error_type.as_str()).collect();
+
+    propagated
+        .iter()
+        .filter_map(|p| {
+            match &p.error_type {
+                ErrorType::Named(thrown_type) => {
+                    let is_allowed = declared_types
+                        .iter()
+                        .any(|declared| resolver.is_assignable_to(file_path, thrown_type, declared));
+                    if is_allowed {
+                        None
+                    } else {
+                        Some(p.error_type.clone())
+                    }
+                }
+                ErrorType::Unknown | ErrorType::Rethrow(_) => {
+                    // Unknown throws are always violations if parent declares nothing or specific types
+                    if declared_types.is_empty() {
+                        Some(p.error_type.clone())
+                    } else {
+                        None
+                    }
+                }
+            }
+        })
+        .collect()
 }

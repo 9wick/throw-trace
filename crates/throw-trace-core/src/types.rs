@@ -127,6 +127,7 @@ pub struct FunctionSignature {
     pub calls: Vec<CallSite>,
     pub try_catch_blocks: Vec<TryCatchBlock>,
     pub is_async: bool,
+    pub class_name: Option<CompactString>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -140,4 +141,52 @@ pub struct PropagatedThrow {
 pub struct Diagnostic {
     pub function: FunctionId,
     pub missing_throws: Vec<PropagatedThrow>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct TypeId {
+    pub file_path: PathBuf,
+    pub name: CompactString,
+    pub span: Span,
+}
+
+impl TypeId {
+    pub fn new(file_path: PathBuf, name: impl Into<CompactString>, span: Span) -> Self {
+        Self { file_path, name: name.into(), span }
+    }
+}
+
+impl fmt::Display for TypeId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}:{}", self.file_path.display(), self.name)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RelationKind {
+    Implements,
+    Extends,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TypeRelation {
+    pub child: TypeId,
+    pub parent: TypeId,
+    pub kind: RelationKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MethodSignature {
+    pub type_id: TypeId,
+    pub method_name: CompactString,
+    pub method_span: Span,
+    pub declared_throws: Vec<DeclaredThrow>,
+    pub is_abstract: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LspViolation {
+    pub implementation: FunctionId,
+    pub parent_method: MethodSignature,
+    pub illegal_throws: Vec<ErrorType>,
 }

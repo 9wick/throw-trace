@@ -1,6 +1,6 @@
 use serde::Serialize;
 use std::io::{self, Write};
-use throw_trace_core::Diagnostic;
+use throw_trace_core::{Diagnostic, LspViolation};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutputFormat {
@@ -21,6 +21,7 @@ impl OutputFormat {
 #[derive(Serialize)]
 struct JsonReport {
     diagnostics: Vec<JsonDiagnostic>,
+    lsp_violations: Vec<JsonLspViolation>,
     summary: Summary,
 }
 
@@ -39,26 +40,42 @@ struct JsonMissingThrow {
 }
 
 #[derive(Serialize)]
+struct JsonLspViolation {
+    file: String,
+    class: String,
+    method: String,
+    illegal_throws: Vec<String>,
+    parent_type: String,
+    parent_declared_throws: Vec<String>,
+}
+
+#[derive(Serialize)]
 struct Summary {
     errors: usize,
+    lsp_violations: usize,
     files_checked: usize,
 }
 
 pub fn report(
     diagnostics: &[Diagnostic],
+    lsp_violations: &[LspViolation],
     files_checked: usize,
     format: OutputFormat,
 ) -> io::Result<()> {
     match format {
-        OutputFormat::Text => report_text(diagnostics, files_checked),
-        OutputFormat::Json => report_json(diagnostics, files_checked),
+        OutputFormat::Text => report_text(diagnostics, lsp_violations, files_checked),
+        OutputFormat::Json => report_json(diagnostics, lsp_violations, files_checked),
     }
 }
 
-fn report_text(diagnostics: &[Diagnostic], files_checked: usize) -> io::Result<()> {
+fn report_text(
+    diagnostics: &[Diagnostic],
+    lsp_violations: &[LspViolation],
+    files_checked: usize,
+) -> io::Result<()> {
     let mut stdout = io::stdout().lock();
 
-    if diagnostics.is_empty() {
+    if diagnostics.is_empty() && lsp_violations.is_empty() {
         writeln!(stdout, "No issues found in {files_checked} files")?;
         return Ok(());
     }
@@ -85,13 +102,55 @@ fn report_text(diagnostics: &[Diagnostic], files_checked: usize) -> io::Result<(
         writeln!(stdout)?;
     }
 
+    for violation in lsp_violations {
+        writeln!(stdout, "error: LSP violation - throws not declared in parent")?;
+        writeln!(
+            stdout,
+            "  --> {}:{}",
+            violation.implementation.file_path.display(),
+            violation.implementation.name
+        )?;
+        writeln!(stdout, "   |")?;
+
+        for illegal in &violation.illegal_throws {
+            let type_name = illegal.type_name().unwrap_or("Unknown");
+            writeln!(
+                stdout,
+                "   | {} is not declared in {}.{}",
+                type_name, violation.parent_method.type_id.name, violation.parent_method.method_name
+            )?;
+        }
+
+        writeln!(stdout, "   |")?;
+        let parent_throws: Vec<_> =
+            violation.parent_method.declared_throws.iter().map(|d| d.error_type.as_str()).collect();
+        if parent_throws.is_empty() {
+            writeln!(stdout, "   = parent declares: (no throws allowed)")?;
+        } else {
+            writeln!(stdout, "   = parent declares: @throws {{{}}}", parent_throws.join(", "))?;
+        }
+        writeln!(
+            stdout,
+            "   = help: handle the exception in the implementation or add @throws to the parent"
+        )?;
+        writeln!(stdout)?;
+    }
+
     let error_count: usize = diagnostics.iter().map(|d| d.missing_throws.len()).sum();
-    writeln!(stdout, "Found {error_count} errors in {files_checked} files")?;
+    let violation_count = lsp_violations.len();
+    writeln!(
+        stdout,
+        "Found {error_count} errors, {violation_count} LSP violations in {files_checked} files"
+    )?;
 
     Ok(())
 }
 
-fn report_json(diagnostics: &[Diagnostic], files_checked: usize) -> io::Result<()> {
+fn report_json(
+    diagnostics: &[Diagnostic],
+    lsp_violations: &[LspViolation],
+    files_checked: usize,
+) -> io::Result<()> {
     let json_diagnostics: Vec<JsonDiagnostic> = diagnostics
         .iter()
         .map(|d| JsonDiagnostic {
@@ -109,11 +168,34 @@ fn report_json(diagnostics: &[Diagnostic], files_checked: usize) -> io::Result<(
         })
         .collect();
 
+    let json_lsp_violations: Vec<JsonLspViolation> = lsp_violations
+        .iter()
+        .map(|v| JsonLspViolation {
+            file: v.implementation.file_path.display().to_string(),
+            class: String::new(),
+            method: v.implementation.name.to_string(),
+            illegal_throws: v
+                .illegal_throws
+                .iter()
+                .map(|e| e.type_name().unwrap_or("Unknown").to_string())
+                .collect(),
+            parent_type: v.parent_method.type_id.name.to_string(),
+            parent_declared_throws: v
+                .parent_method
+                .declared_throws
+                .iter()
+                .map(|d| d.error_type.to_string())
+                .collect(),
+        })
+        .collect();
+
     let error_count: usize = diagnostics.iter().map(|d| d.missing_throws.len()).sum();
+    let violation_count = lsp_violations.len();
 
     let report = JsonReport {
         diagnostics: json_diagnostics,
-        summary: Summary { errors: error_count, files_checked },
+        lsp_violations: json_lsp_violations,
+        summary: Summary { errors: error_count, lsp_violations: violation_count, files_checked },
     };
 
     let json = serde_json::to_string_pretty(&report)?;

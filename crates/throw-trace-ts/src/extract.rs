@@ -1,8 +1,8 @@
 use compact_str::CompactString;
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
-    BindingPatternKind, CallExpression, Expression, Function, Statement, ThrowStatement,
-    TryStatement, TSType,
+    BindingPatternKind, CallExpression, Class, Expression, Function, MethodDefinition, Statement,
+    ThrowStatement, TryStatement, TSInterfaceDeclaration, TSType,
 };
 use oxc_ast_visit::{walk, Visit};
 use oxc_parser::Parser;
@@ -11,18 +11,26 @@ use oxc_syntax::scope::ScopeFlags;
 use std::collections::HashMap;
 use std::path::Path;
 use throw_trace_core::{
-    CallSite, DeclaredThrow, ErrorType, FunctionId, FunctionSignature, Span, ThrowSite,
-    TryCatchBlock,
+    CallSite, DeclaredThrow, ErrorType, FunctionId, FunctionSignature, MethodSignature,
+    RelationKind, Span, ThrowSite, TryCatchBlock, TypeId, TypeRelation,
 };
 
 use crate::jsdoc::extract_throws_from_jsdoc;
 use crate::parser::ParseError;
 use crate::throw_analyzer::analyze_throw_expr_with_catch_params;
 
+pub struct ExtractionResult {
+    pub signatures: Vec<FunctionSignature>,
+    pub method_signatures: Vec<MethodSignature>,
+    pub type_relations: Vec<TypeRelation>,
+}
+
 struct FunctionExtractor<'a> {
     source: &'a str,
     file_path: &'a Path,
     signatures: Vec<FunctionSignature>,
+    method_signatures: Vec<MethodSignature>,
+    type_relations: Vec<TypeRelation>,
     // Stack of indices into `signatures` representing the current function scope chain.
     // The last element is the innermost (current) function.
     scope_stack: Vec<usize>,
@@ -30,6 +38,8 @@ struct FunctionExtractor<'a> {
     catch_param_stack: Vec<String>,
     // Variable name -> type annotation (supports union types as Vec)
     variable_types: HashMap<String, Vec<String>>,
+    // Current class context for method extraction
+    current_class: Option<TypeId>,
 }
 
 impl<'a> FunctionExtractor<'a> {
@@ -38,9 +48,12 @@ impl<'a> FunctionExtractor<'a> {
             source,
             file_path,
             signatures: Vec::new(),
+            method_signatures: Vec::new(),
+            type_relations: Vec::new(),
             scope_stack: Vec::new(),
             catch_param_stack: Vec::new(),
             variable_types: HashMap::new(),
+            current_class: None,
         }
     }
 
@@ -61,6 +74,8 @@ impl<'a> FunctionExtractor<'a> {
         let declared_throws =
             preceding_comment.map(|c| parse_declared_throws(c, func_span)).unwrap_or_default();
 
+        let class_name = self.current_class.as_ref().map(|c| c.name.clone());
+
         let idx = self.signatures.len();
         self.signatures.push(FunctionSignature {
             id,
@@ -70,6 +85,7 @@ impl<'a> FunctionExtractor<'a> {
             calls: Vec::new(),
             try_catch_blocks: Vec::new(),
             is_async,
+            class_name,
         });
         self.scope_stack.push(idx);
         idx
@@ -149,6 +165,128 @@ impl<'a> FunctionExtractor<'a> {
             return;
         };
         sig.try_catch_blocks.push(TryCatchBlock { try_span, catch_span, caught_types });
+    }
+
+    fn extract_interface(&mut self, iface: &TSInterfaceDeclaration<'_>) {
+        let type_id = TypeId::new(
+            self.file_path.to_path_buf(),
+            iface.id.name.as_str(),
+            Span { start: iface.span.start, end: iface.span.end },
+        );
+
+        // Extract extends clauses
+        for heritage in &iface.extends {
+            if let Expression::Identifier(id) = &heritage.expression {
+                let parent_id = TypeId::new(
+                    self.file_path.to_path_buf(),
+                    id.name.as_str(),
+                    Span { start: id.span.start, end: id.span.end },
+                );
+                self.type_relations.push(TypeRelation {
+                    child: type_id.clone(),
+                    parent: parent_id,
+                    kind: RelationKind::Extends,
+                });
+            }
+        }
+
+        // Extract method signatures
+        for sig in &iface.body.body {
+            if let oxc_ast::ast::TSSignature::TSMethodSignature(method) = sig {
+                let method_name = match &method.key {
+                    oxc_ast::ast::PropertyKey::StaticIdentifier(id) => id.name.as_str(),
+                    _ => continue,
+                };
+
+                let comment = preceding_jsdoc(self.source, method.span.start);
+                let declared_throws = comment
+                    .map(|c| parse_declared_throws(&c, method.span))
+                    .unwrap_or_default();
+
+                self.method_signatures.push(MethodSignature {
+                    type_id: type_id.clone(),
+                    method_name: method_name.into(),
+                    method_span: Span { start: method.span.start, end: method.span.end },
+                    declared_throws,
+                    is_abstract: false,
+                });
+            }
+        }
+    }
+
+    fn extract_class(&mut self, class: &Class<'_>) {
+        let class_name = match &class.id {
+            Some(id) => id.name.as_str(),
+            None => return,
+        };
+
+        let type_id = TypeId::new(
+            self.file_path.to_path_buf(),
+            class_name,
+            Span { start: class.span.start, end: class.span.end },
+        );
+
+        // Extract extends clause
+        if let Some(super_class) = &class.super_class {
+            if let Expression::Identifier(id) = super_class {
+                let parent_id = TypeId::new(
+                    self.file_path.to_path_buf(),
+                    id.name.as_str(),
+                    Span { start: id.span.start, end: id.span.end },
+                );
+                self.type_relations.push(TypeRelation {
+                    child: type_id.clone(),
+                    parent: parent_id,
+                    kind: RelationKind::Extends,
+                });
+            }
+        }
+
+        // Extract implements clauses
+        for impl_clause in &class.implements {
+            if let oxc_ast::ast::TSTypeName::IdentifierReference(id) = &impl_clause.expression {
+                let parent_id = TypeId::new(
+                    self.file_path.to_path_buf(),
+                    id.name.as_str(),
+                    Span { start: id.span.start, end: id.span.end },
+                );
+                self.type_relations.push(TypeRelation {
+                    child: type_id.clone(),
+                    parent: parent_id,
+                    kind: RelationKind::Implements,
+                });
+            }
+        }
+
+        // Extract abstract method signatures from abstract classes
+        if class.r#abstract {
+            for element in &class.body.body {
+                if let oxc_ast::ast::ClassElement::MethodDefinition(method) = element {
+                    if method.r#type == oxc_ast::ast::MethodDefinitionType::TSAbstractMethodDefinition
+                    {
+                        let method_name = match &method.key {
+                            oxc_ast::ast::PropertyKey::StaticIdentifier(id) => id.name.as_str(),
+                            _ => continue,
+                        };
+
+                        let comment = preceding_jsdoc(self.source, method.span.start);
+                        let declared_throws = comment
+                            .map(|c| parse_declared_throws(&c, method.span))
+                            .unwrap_or_default();
+
+                        self.method_signatures.push(MethodSignature {
+                            type_id: type_id.clone(),
+                            method_name: method_name.into(),
+                            method_span: Span { start: method.span.start, end: method.span.end },
+                            declared_throws,
+                            is_abstract: true,
+                        });
+                    }
+                }
+            }
+        }
+
+        self.current_class = Some(type_id);
     }
 }
 
@@ -333,6 +471,45 @@ impl<'a> Visit<'a> for FunctionExtractor<'a> {
             walk::walk_block_statement(self, finalizer);
         }
     }
+
+    fn visit_ts_interface_declaration(&mut self, iface: &TSInterfaceDeclaration<'a>) {
+        self.extract_interface(iface);
+        walk::walk_ts_interface_declaration(self, iface);
+    }
+
+    fn visit_class(&mut self, class: &Class<'a>) {
+        let prev_class = self.current_class.take();
+        self.extract_class(class);
+        walk::walk_class(self, class);
+        self.current_class = prev_class;
+    }
+
+    fn visit_method_definition(&mut self, method: &MethodDefinition<'a>) {
+        // Skip abstract methods (they have no body)
+        if method.r#type == oxc_ast::ast::MethodDefinitionType::TSAbstractMethodDefinition {
+            return;
+        }
+
+        let method_name = match &method.key {
+            oxc_ast::ast::PropertyKey::StaticIdentifier(id) => id.name.as_str(),
+            _ => {
+                walk::walk_method_definition(self, method);
+                return;
+            }
+        };
+
+        let name_span = match &method.key {
+            oxc_ast::ast::PropertyKey::StaticIdentifier(id) => id.span,
+            _ => method.span,
+        };
+
+        let comment = preceding_jsdoc(self.source, method.span.start);
+        let is_async = method.value.r#async;
+
+        self.begin_function(method_name, name_span, method.value.span, is_async, comment.as_deref());
+        walk::walk_method_definition(self, method);
+        self.end_function();
+    }
 }
 
 /// Find the `JSDoc` comment immediately preceding the given byte offset in source.
@@ -362,6 +539,11 @@ pub fn extract_functions(
     source: &str,
     file_path: &Path,
 ) -> Result<Vec<FunctionSignature>, ParseError> {
+    let result = extract_all(source, file_path)?;
+    Ok(result.signatures)
+}
+
+pub fn extract_all(source: &str, file_path: &Path) -> Result<ExtractionResult, ParseError> {
     let allocator = Allocator::default();
     let source_type = SourceType::ts();
     let parser_return = Parser::new(&allocator, source, source_type).parse();
@@ -375,5 +557,9 @@ pub fn extract_functions(
     let mut extractor = FunctionExtractor::new(source, file_path);
     extractor.visit_program(&parser_return.program);
 
-    Ok(extractor.signatures)
+    Ok(ExtractionResult {
+        signatures: extractor.signatures,
+        method_signatures: extractor.method_signatures,
+        type_relations: extractor.type_relations,
+    })
 }

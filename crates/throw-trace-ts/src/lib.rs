@@ -7,7 +7,7 @@ mod throw_analyzer;
 mod try_catch;
 pub mod tsserver;
 
-pub use extract::extract_functions;
+pub use extract::{extract_all, extract_functions, ExtractionResult};
 pub use jsdoc::extract_throws_from_jsdoc;
 pub use parser::parse_source;
 pub use throw_analyzer::{analyze_throw_expr, analyze_throw_expr_with_catch_params};
@@ -286,5 +286,72 @@ function foo() {
         assert_eq!(sigs[0].direct_throws.len(), 2);
         assert_eq!(sigs[0].direct_throws[0].error_type, ErrorType::Named("ErrorA".into()));
         assert_eq!(sigs[0].direct_throws[1].error_type, ErrorType::Named("ErrorB".into()));
+    }
+
+    #[test]
+    fn extract_interface_with_method_throws() {
+        let source = r#"
+interface UserRepository {
+    /**
+     * @throws {NotFoundError}
+     */
+    findById(id: string): User;
+}
+"#;
+        let file_path = PathBuf::from("test.ts");
+        let result = extract_all(source, &file_path).unwrap();
+        assert_eq!(result.method_signatures.len(), 1);
+        assert_eq!(result.method_signatures[0].method_name.as_str(), "findById");
+        assert_eq!(result.method_signatures[0].declared_throws.len(), 1);
+        assert_eq!(
+            result.method_signatures[0].declared_throws[0].error_type.as_str(),
+            "NotFoundError"
+        );
+    }
+
+    #[test]
+    fn extract_class_implements_interface() {
+        let source = r#"
+interface Repository {}
+class UserRepository implements Repository {}
+"#;
+        let file_path = PathBuf::from("test.ts");
+        let result = extract_all(source, &file_path).unwrap();
+        assert_eq!(result.type_relations.len(), 1);
+        assert_eq!(result.type_relations[0].child.name.as_str(), "UserRepository");
+        assert_eq!(result.type_relations[0].parent.name.as_str(), "Repository");
+        assert_eq!(result.type_relations[0].kind, throw_trace_core::RelationKind::Implements);
+    }
+
+    #[test]
+    fn extract_class_extends_class() {
+        let source = r#"
+class BaseService {}
+class UserService extends BaseService {}
+"#;
+        let file_path = PathBuf::from("test.ts");
+        let result = extract_all(source, &file_path).unwrap();
+        assert_eq!(result.type_relations.len(), 1);
+        assert_eq!(result.type_relations[0].child.name.as_str(), "UserService");
+        assert_eq!(result.type_relations[0].parent.name.as_str(), "BaseService");
+        assert_eq!(result.type_relations[0].kind, throw_trace_core::RelationKind::Extends);
+    }
+
+    #[test]
+    fn extract_abstract_class_method() {
+        let source = r#"
+abstract class BaseRepository {
+    /**
+     * @throws {NotFoundError}
+     */
+    abstract findById(id: string): User;
+}
+"#;
+        let file_path = PathBuf::from("test.ts");
+        let result = extract_all(source, &file_path).unwrap();
+        assert_eq!(result.method_signatures.len(), 1);
+        assert_eq!(result.method_signatures[0].method_name.as_str(), "findById");
+        assert!(result.method_signatures[0].is_abstract);
+        assert_eq!(result.method_signatures[0].declared_throws.len(), 1);
     }
 }

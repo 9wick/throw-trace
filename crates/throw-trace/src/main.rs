@@ -54,10 +54,11 @@ fn main() -> Result<()> {
             analyzer.analyze_files(&files)?;
 
             let diagnostics = analyzer.generate_diagnostics();
+            let lsp_violations = analyzer.generate_lsp_violations();
 
-            report(&diagnostics, files.len(), output_format)?;
+            report(&diagnostics, &lsp_violations, files.len(), output_format)?;
 
-            if !diagnostics.is_empty() {
+            if !diagnostics.is_empty() || !lsp_violations.is_empty() {
                 std::process::exit(1);
             }
 
