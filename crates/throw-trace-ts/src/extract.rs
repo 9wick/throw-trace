@@ -1,8 +1,8 @@
 use compact_str::CompactString;
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
-    BindingPatternKind, CallExpression, Class, Expression, Function, Statement, ThrowStatement,
-    TryStatement, TSInterfaceDeclaration, TSType,
+    BindingPatternKind, CallExpression, Class, Expression, Function, MethodDefinition, Statement,
+    ThrowStatement, TryStatement, TSInterfaceDeclaration, TSType,
 };
 use oxc_ast_visit::{walk, Visit};
 use oxc_parser::Parser;
@@ -74,6 +74,8 @@ impl<'a> FunctionExtractor<'a> {
         let declared_throws =
             preceding_comment.map(|c| parse_declared_throws(c, func_span)).unwrap_or_default();
 
+        let class_name = self.current_class.as_ref().map(|c| c.name.clone());
+
         let idx = self.signatures.len();
         self.signatures.push(FunctionSignature {
             id,
@@ -83,6 +85,7 @@ impl<'a> FunctionExtractor<'a> {
             calls: Vec::new(),
             try_catch_blocks: Vec::new(),
             is_async,
+            class_name,
         });
         self.scope_stack.push(idx);
         idx
@@ -479,6 +482,33 @@ impl<'a> Visit<'a> for FunctionExtractor<'a> {
         self.extract_class(class);
         walk::walk_class(self, class);
         self.current_class = prev_class;
+    }
+
+    fn visit_method_definition(&mut self, method: &MethodDefinition<'a>) {
+        // Skip abstract methods (they have no body)
+        if method.r#type == oxc_ast::ast::MethodDefinitionType::TSAbstractMethodDefinition {
+            return;
+        }
+
+        let method_name = match &method.key {
+            oxc_ast::ast::PropertyKey::StaticIdentifier(id) => id.name.as_str(),
+            _ => {
+                walk::walk_method_definition(self, method);
+                return;
+            }
+        };
+
+        let name_span = match &method.key {
+            oxc_ast::ast::PropertyKey::StaticIdentifier(id) => id.span,
+            _ => method.span,
+        };
+
+        let comment = preceding_jsdoc(self.source, method.span.start);
+        let is_async = method.value.r#async;
+
+        self.begin_function(method_name, name_span, method.value.span, is_async, comment.as_deref());
+        walk::walk_method_definition(self, method);
+        self.end_function();
     }
 }
 

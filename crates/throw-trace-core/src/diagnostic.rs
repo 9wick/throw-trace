@@ -97,9 +97,8 @@ pub fn generate_lsp_violations<S: std::hash::BuildHasher, R: TypeResolver>(
     let method_lookup = build_method_lookup(method_signatures);
 
     for (func_id, sig) in signatures {
-        // Find the class this function belongs to (by matching file path and checking if
-        // function name matches a method in a class that has type relations)
-        let class_name = extract_class_name_from_function(func_id, type_relations);
+        // Find the class this function belongs to
+        let class_name = extract_class_name_from_signature(func_id, signatures);
         let Some(class_name) = class_name else {
             continue;
         };
@@ -148,18 +147,11 @@ fn build_method_lookup(methods: &[MethodSignature]) -> HashMap<(&str, &str), &Me
     methods.iter().map(|m| ((m.type_id.name.as_str(), m.method_name.as_str()), m)).collect()
 }
 
-fn extract_class_name_from_function(
+fn extract_class_name_from_signature<S: std::hash::BuildHasher>(
     func_id: &FunctionId,
-    relations: &[TypeRelation],
+    signatures: &HashMap<FunctionId, FunctionSignature, S>,
 ) -> Option<String> {
-    // Find if there's a type relation where the child class is in the same file
-    // and the function could be a method of that class
-    for rel in relations {
-        if rel.child.file_path == func_id.file_path {
-            return Some(rel.child.name.to_string());
-        }
-    }
-    None
+    signatures.get(func_id).and_then(|sig| sig.class_name.as_ref().map(|s| s.to_string()))
 }
 
 fn get_all_parent_types(type_name: &str, lookup: &HashMap<String, Vec<String>>) -> Vec<String> {

@@ -127,6 +127,7 @@ pub struct FunctionSignature {
     pub calls: Vec<CallSite>,
     pub try_catch_blocks: Vec<TryCatchBlock>,
     pub is_async: bool,
+    pub class_name: Option<CompactString>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

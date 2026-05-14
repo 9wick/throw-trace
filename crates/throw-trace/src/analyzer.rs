@@ -3,9 +3,10 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 use throw_trace_core::{
-    generate_diagnostics_with_resolver, CallGraph, Diagnostic, FunctionId, FunctionSignature, Span,
+    generate_diagnostics_with_resolver, generate_lsp_violations, CallGraph, Diagnostic, FunctionId,
+    FunctionSignature, LspViolation, MethodSignature, Span, TypeRelation,
 };
-use throw_trace_ts::{byte_offset_to_line_col, extract_functions, TsServer, TsServerTypeResolver};
+use throw_trace_ts::{byte_offset_to_line_col, extract_all, TsServer, TsServerTypeResolver};
 
 pub struct AnalyzerConfig {
     pub max_depth: u32,
@@ -21,6 +22,8 @@ impl Default for AnalyzerConfig {
 
 pub struct Analyzer {
     signatures: HashMap<FunctionId, FunctionSignature>,
+    method_signatures: Vec<MethodSignature>,
+    type_relations: Vec<TypeRelation>,
     graph: CallGraph,
     entry_files: HashSet<PathBuf>,
     analyzed_files: HashSet<PathBuf>,
@@ -37,6 +40,8 @@ impl Analyzer {
     pub fn with_config(config: AnalyzerConfig) -> Self {
         Self {
             signatures: HashMap::new(),
+            method_signatures: Vec::new(),
+            type_relations: Vec::new(),
             graph: CallGraph::new(),
             entry_files: HashSet::new(),
             analyzed_files: HashSet::new(),
@@ -70,12 +75,15 @@ impl Analyzer {
         }
 
         let source = fs::read_to_string(path)?;
-        let sigs = extract_functions(&source, path)?;
+        let result = extract_all(&source, path)?;
 
-        for sig in sigs {
+        for sig in result.signatures {
             self.graph.add_function(sig.id.clone());
             self.signatures.insert(sig.id.clone(), sig);
         }
+
+        self.method_signatures.extend(result.method_signatures);
+        self.type_relations.extend(result.type_relations);
 
         self.analyzed_files.insert(path.clone());
         Ok(())
@@ -221,6 +229,31 @@ impl Analyzer {
         all_diagnostics
             .into_iter()
             .filter(|d| self.entry_files.contains(&d.function.file_path))
+            .collect()
+    }
+
+    pub fn generate_lsp_violations(&self) -> Vec<LspViolation> {
+        let all_violations = if let Ok(mut resolver) = TsServerTypeResolver::new() {
+            generate_lsp_violations(
+                &self.signatures,
+                &self.method_signatures,
+                &self.type_relations,
+                &self.graph,
+                &mut resolver,
+            )
+        } else {
+            generate_lsp_violations(
+                &self.signatures,
+                &self.method_signatures,
+                &self.type_relations,
+                &self.graph,
+                &mut throw_trace_core::NoOpTypeResolver,
+            )
+        };
+
+        all_violations
+            .into_iter()
+            .filter(|v| self.entry_files.contains(&v.implementation.file_path))
             .collect()
     }
 }

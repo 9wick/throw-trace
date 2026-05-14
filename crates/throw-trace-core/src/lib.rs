@@ -104,6 +104,7 @@ mod tests {
             calls: vec![],
             try_catch_blocks: vec![],
             is_async: false,
+            class_name: None,
         };
         assert_eq!(sig.id.name.as_str(), "testFn");
         assert!(!sig.is_async);
@@ -197,6 +198,7 @@ mod tests {
             calls: vec![],
             try_catch_blocks: vec![],
             is_async: false,
+            class_name: None,
         };
         signatures.insert(id.clone(), sig);
 
@@ -224,6 +226,7 @@ mod tests {
                 calls: vec![],
                 try_catch_blocks: vec![],
                 is_async: false,
+            class_name: None,
             },
         );
 
@@ -256,6 +259,7 @@ mod tests {
                 calls: vec![],
                 try_catch_blocks: vec![],
                 is_async: false,
+            class_name: None,
             },
         );
 
@@ -286,6 +290,7 @@ mod tests {
                 calls: vec![],
                 try_catch_blocks: vec![],
                 is_async: false,
+            class_name: None,
             },
         );
 
@@ -303,6 +308,7 @@ mod tests {
                 }],
                 try_catch_blocks: vec![],
                 is_async: false,
+            class_name: None,
             },
         );
 
@@ -345,6 +351,7 @@ mod tests {
                     caught_types: vec!["SomeError".into()],
                 }],
                 is_async: false,
+            class_name: None,
             },
         );
 
@@ -383,6 +390,7 @@ mod tests {
                     caught_types: vec!["OriginalError".into()],
                 }],
                 is_async: false,
+            class_name: None,
             },
         );
 
@@ -416,6 +424,7 @@ mod tests {
                 calls: vec![],
                 try_catch_blocks: vec![],
                 is_async: false,
+                class_name: Some("DatabaseUserRepository".into()),
             },
         );
 
@@ -490,6 +499,7 @@ mod tests {
                 calls: vec![],
                 try_catch_blocks: vec![],
                 is_async: false,
+                class_name: Some("ImplementationA".into()),
             },
         );
 
@@ -561,6 +571,7 @@ mod tests {
                 calls: vec![],
                 try_catch_blocks: vec![],
                 is_async: false,
+                class_name: Some("DatabaseUserRepository".into()),
             },
         );
 
