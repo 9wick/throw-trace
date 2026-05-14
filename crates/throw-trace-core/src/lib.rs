@@ -10,8 +10,8 @@ pub use diagnostic::{generate_diagnostics_with_resolver, generate_lsp_violations
 pub use propagation::compute_propagated_throws;
 pub use types::{
     CallSite, DeclaredThrow, Diagnostic, ErrorType, FunctionId, FunctionSignature, LspViolation,
-    MethodSignature, NoOpTypeResolver, PropagatedThrow, RelationKind, Span, ThrowSite, TryCatchBlock,
-    TypeId, TypeRelation, TypeResolver,
+    MethodSignature, NoOpTypeResolver, PropagatedThrow, RelationKind, Span, ThrowSite,
+    TryCatchBlock, TypeId, TypeRelation, TypeResolver,
 };
 
 #[cfg(test)]
@@ -226,7 +226,7 @@ mod tests {
                 calls: vec![],
                 try_catch_blocks: vec![],
                 is_async: false,
-            class_name: None,
+                class_name: None,
             },
         );
 
@@ -259,7 +259,7 @@ mod tests {
                 calls: vec![],
                 try_catch_blocks: vec![],
                 is_async: false,
-            class_name: None,
+                class_name: None,
             },
         );
 
@@ -290,7 +290,7 @@ mod tests {
                 calls: vec![],
                 try_catch_blocks: vec![],
                 is_async: false,
-            class_name: None,
+                class_name: None,
             },
         );
 
@@ -308,7 +308,7 @@ mod tests {
                 }],
                 try_catch_blocks: vec![],
                 is_async: false,
-            class_name: None,
+                class_name: None,
             },
         );
 
@@ -351,7 +351,7 @@ mod tests {
                     caught_types: vec!["SomeError".into()],
                 }],
                 is_async: false,
-            class_name: None,
+                class_name: None,
             },
         );
 
@@ -390,7 +390,7 @@ mod tests {
                     caught_types: vec!["OriginalError".into()],
                 }],
                 is_async: false,
-            class_name: None,
+                class_name: None,
             },
         );
 
@@ -405,11 +405,8 @@ mod tests {
         let graph = CallGraph::new();
 
         // Class method that throws DBError
-        let method_id = FunctionId::new(
-            PathBuf::from("test.ts"),
-            "findById",
-            Span { start: 100, end: 200 },
-        );
+        let method_id =
+            FunctionId::new(PathBuf::from("test.ts"), "findById", Span { start: 100, end: 200 });
 
         signatures.insert(
             method_id.clone(),
@@ -480,11 +477,8 @@ mod tests {
         let graph = CallGraph::new();
 
         // Class method that throws NotFoundError (allowed)
-        let method_id = FunctionId::new(
-            PathBuf::from("test.ts"),
-            "findById",
-            Span { start: 100, end: 200 },
-        );
+        let method_id =
+            FunctionId::new(PathBuf::from("test.ts"), "findById", Span { start: 100, end: 200 });
 
         signatures.insert(
             method_id.clone(),
@@ -552,11 +546,8 @@ mod tests {
         let graph = CallGraph::new();
 
         // Class method that throws (not allowed when interface declares nothing)
-        let method_id = FunctionId::new(
-            PathBuf::from("test.ts"),
-            "save",
-            Span { start: 100, end: 200 },
-        );
+        let method_id =
+            FunctionId::new(PathBuf::from("test.ts"), "save", Span { start: 100, end: 200 });
 
         signatures.insert(
             method_id.clone(),

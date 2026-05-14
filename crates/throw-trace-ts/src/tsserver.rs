@@ -240,7 +240,10 @@ impl TsServer {
     }
 
     /// Get semantic diagnostics (type errors) for a file.
-    pub fn semantic_diagnostics(&mut self, file_path: &Path) -> Result<Vec<serde_json::Value>, TsServerError> {
+    pub fn semantic_diagnostics(
+        &mut self,
+        file_path: &Path,
+    ) -> Result<Vec<serde_json::Value>, TsServerError> {
         let abs_path = file_path.canonicalize().unwrap_or_else(|_| file_path.to_path_buf());
         let seq = self.send_request(
             "semanticDiagnosticsSync",
@@ -262,22 +265,15 @@ impl TsServer {
     /// Reload file from disk (discard virtual changes).
     pub fn reload_file(&mut self, file_path: &Path) -> Result<(), TsServerError> {
         let abs_path = file_path.canonicalize().unwrap_or_else(|_| file_path.to_path_buf());
-        let seq = self.send_request(
-            "reloadProjects",
-            serde_json::json!({}),
-        )?;
+        let seq = self.send_request("reloadProjects", serde_json::json!({}))?;
         self.read_response(seq)?;
 
-        let seq = self.send_request(
-            "close",
-            serde_json::json!({ "file": abs_path.to_string_lossy() }),
-        )?;
+        let seq =
+            self.send_request("close", serde_json::json!({ "file": abs_path.to_string_lossy() }))?;
         self.read_response(seq)?;
 
-        let seq = self.send_request(
-            "open",
-            serde_json::json!({ "file": abs_path.to_string_lossy() }),
-        )?;
+        let seq =
+            self.send_request("open", serde_json::json!({ "file": abs_path.to_string_lossy() }))?;
         self.read_response(seq)?;
         Ok(())
     }
@@ -315,9 +311,7 @@ impl TsServerTypeResolver {
     }
 
     fn count_lines(file_path: &Path) -> u32 {
-        std::fs::read_to_string(file_path)
-            .map(|s| s.lines().count() as u32)
-            .unwrap_or(1)
+        std::fs::read_to_string(file_path).map(|s| s.lines().count() as u32).unwrap_or(1)
     }
 }
 
@@ -533,11 +527,7 @@ mod tests {
         assert!(!spans.is_empty(), "Should return at least one definition");
 
         let def = &spans[0];
-        assert!(
-            def.file.ends_with("a.ts"),
-            "Definition should point to a.ts, got: {}",
-            def.file
-        );
+        assert!(def.file.ends_with("a.ts"), "Definition should point to a.ts, got: {}", def.file);
     }
 
     #[test]

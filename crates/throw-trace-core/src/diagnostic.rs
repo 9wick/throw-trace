@@ -117,7 +117,8 @@ pub fn generate_lsp_violations<S: std::hash::BuildHasher, R: TypeResolver>(
             let propagated = compute_propagated_throws(func_id, signatures, graph);
 
             // Check each propagated throw against parent's declared throws
-            let illegal = find_illegal_throws(&propagated, parent_method, resolver, &sig.id.file_path);
+            let illegal =
+                find_illegal_throws(&propagated, parent_method, resolver, &sig.id.file_path);
 
             if !illegal.is_empty() {
                 violations.push(LspViolation {
@@ -135,10 +136,7 @@ pub fn generate_lsp_violations<S: std::hash::BuildHasher, R: TypeResolver>(
 fn build_parent_lookup(relations: &[TypeRelation]) -> HashMap<String, Vec<String>> {
     let mut lookup: HashMap<String, Vec<String>> = HashMap::new();
     for rel in relations {
-        lookup
-            .entry(rel.child.name.to_string())
-            .or_default()
-            .push(rel.parent.name.to_string());
+        lookup.entry(rel.child.name.to_string()).or_default().push(rel.parent.name.to_string());
     }
     lookup
 }
@@ -190,9 +188,9 @@ fn find_illegal_throws<R: TypeResolver>(
         .filter_map(|p| {
             match &p.error_type {
                 ErrorType::Named(thrown_type) => {
-                    let is_allowed = declared_types
-                        .iter()
-                        .any(|declared| resolver.is_assignable_to(file_path, thrown_type, declared));
+                    let is_allowed = declared_types.iter().any(|declared| {
+                        resolver.is_assignable_to(file_path, thrown_type, declared)
+                    });
                     if is_allowed {
                         None
                     } else {

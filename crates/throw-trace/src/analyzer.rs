@@ -195,7 +195,9 @@ impl Analyzer {
                 sig.calls.iter().filter_map(|call| {
                     let key = (sig.id.file_path.clone(), call.callee_span);
                     if let Some((def_file, def_line)) = self.resolved_calls.get(&key) {
-                        if let Some(callee_id) = sig_by_file_and_line.get(&(def_file.clone(), *def_line)) {
+                        if let Some(callee_id) =
+                            sig_by_file_and_line.get(&(def_file.clone(), *def_line))
+                        {
                             return Some((sig.id.clone(), (*callee_id).clone()));
                         }
                     }

@@ -2,7 +2,7 @@ use compact_str::CompactString;
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
     BindingPatternKind, CallExpression, Class, Expression, Function, MethodDefinition, Statement,
-    ThrowStatement, TryStatement, TSInterfaceDeclaration, TSType,
+    TSInterfaceDeclaration, TSType, ThrowStatement, TryStatement,
 };
 use oxc_ast_visit::{walk, Visit};
 use oxc_parser::Parser;
@@ -199,9 +199,8 @@ impl<'a> FunctionExtractor<'a> {
                 };
 
                 let comment = preceding_jsdoc(self.source, method.span.start);
-                let declared_throws = comment
-                    .map(|c| parse_declared_throws(&c, method.span))
-                    .unwrap_or_default();
+                let declared_throws =
+                    comment.map(|c| parse_declared_throws(&c, method.span)).unwrap_or_default();
 
                 self.method_signatures.push(MethodSignature {
                     type_id: type_id.clone(),
@@ -262,7 +261,8 @@ impl<'a> FunctionExtractor<'a> {
         if class.r#abstract {
             for element in &class.body.body {
                 if let oxc_ast::ast::ClassElement::MethodDefinition(method) = element {
-                    if method.r#type == oxc_ast::ast::MethodDefinitionType::TSAbstractMethodDefinition
+                    if method.r#type
+                        == oxc_ast::ast::MethodDefinitionType::TSAbstractMethodDefinition
                     {
                         let method_name = match &method.key {
                             oxc_ast::ast::PropertyKey::StaticIdentifier(id) => id.name.as_str(),
@@ -346,7 +346,13 @@ impl<'a> Visit<'a> for FunctionExtractor<'a> {
         if let Some(id) = &func.id {
             // Look for a preceding JSDoc comment via the raw source
             let comment = preceding_jsdoc(self.source, func.span.start);
-            self.begin_function(id.name.as_str(), id.span, func.span, func.r#async, comment.as_deref());
+            self.begin_function(
+                id.name.as_str(),
+                id.span,
+                func.span,
+                func.r#async,
+                comment.as_deref(),
+            );
             walk::walk_function(self, func, flags);
             self.end_function();
         } else {
@@ -355,10 +361,7 @@ impl<'a> Visit<'a> for FunctionExtractor<'a> {
         }
     }
 
-    fn visit_export_named_declaration(
-        &mut self,
-        decl: &oxc_ast::ast::ExportNamedDeclaration<'a>,
-    ) {
+    fn visit_export_named_declaration(&mut self, decl: &oxc_ast::ast::ExportNamedDeclaration<'a>) {
         match &decl.declaration {
             Some(oxc_ast::ast::Declaration::VariableDeclaration(var_decl)) => {
                 for declarator in &var_decl.declarations {
@@ -385,7 +388,13 @@ impl<'a> Visit<'a> for FunctionExtractor<'a> {
             Some(oxc_ast::ast::Declaration::FunctionDeclaration(func)) => {
                 if let Some(id) = &func.id {
                     let comment = preceding_jsdoc(self.source, decl.span.start);
-                    self.begin_function(id.name.as_str(), id.span, func.span, func.r#async, comment.as_deref());
+                    self.begin_function(
+                        id.name.as_str(),
+                        id.span,
+                        func.span,
+                        func.r#async,
+                        comment.as_deref(),
+                    );
                     walk::walk_function(self, func, ScopeFlags::empty());
                     self.end_function();
                 } else {
@@ -506,7 +515,13 @@ impl<'a> Visit<'a> for FunctionExtractor<'a> {
         let comment = preceding_jsdoc(self.source, method.span.start);
         let is_async = method.value.r#async;
 
-        self.begin_function(method_name, name_span, method.value.span, is_async, comment.as_deref());
+        self.begin_function(
+            method_name,
+            name_span,
+            method.value.span,
+            is_async,
+            comment.as_deref(),
+        );
         walk::walk_method_definition(self, method);
         self.end_function();
     }
