@@ -1,0 +1,32 @@
+{
+  "name": "throw-trace",
+  "version": "0.1.0",
+  "description": "Static analysis tool for TypeScript @throws annotations with cross-file propagation.",
+  "homepage": "https://github.com/9wick/throw-trace",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/9wick/throw-trace.git"
+  },
+  "license": "MIT",
+  "author": "KoheiKido <kido@9wick.com>",
+  "type": "module",
+  "bin": {
+    "throw-trace": "lib/index.js"
+  },
+  "files": [
+    "lib",
+    "binaries"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "os": [
+    "linux",
+    "darwin",
+    "win32"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ]
+}
