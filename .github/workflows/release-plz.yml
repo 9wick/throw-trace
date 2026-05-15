@@ -49,13 +49,18 @@ jobs:
       - id: extract
         if: steps.release.outputs.releases_created == 'true'
         run: |
-          TAG=$(echo '${{ steps.release.outputs.releases }}' | jq -r '.[0].tag')
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          TAG=$(echo '${{ steps.release.outputs.releases }}' | jq -r '.[] | select(.package_name == "throw-trace") | .tag')
+          if [ -z "$TAG" ]; then
+            echo "throw-trace package not released, skipping npm publish"
+            echo "tag=" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          fi
 
   build:
     name: Build (${{ matrix.target }})
     needs: release-plz-release
-    if: needs.release-plz-release.outputs.releases_created == 'true'
+    if: needs.release-plz-release.outputs.releases_created == 'true' && needs.release-plz-release.outputs.tag != ''
     strategy:
       fail-fast: true
       matrix:
