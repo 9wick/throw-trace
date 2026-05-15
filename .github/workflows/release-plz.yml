@@ -131,7 +131,6 @@ jobs:
     name: Publish npm package
     needs: [release-plz-release, build]
     runs-on: ubuntu-latest
-    environment: npm
     permissions:
       contents: read
       id-token: write
@@ -139,7 +138,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
           registry-url: 'https://registry.npmjs.org'
       - uses: actions/download-artifact@v4
         with:
@@ -192,7 +191,7 @@ jobs:
     steps:
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
       - name: Install and run published package
         shell: bash
         run: |
