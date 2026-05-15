@@ -1,5 +1,8 @@
 # throw-trace
 
+[![Crates.io](https://img.shields.io/crates/v/throw-trace)](https://crates.io/crates/throw-trace)
+[![npm](https://img.shields.io/npm/v/throw-trace)](https://www.npmjs.com/package/throw-trace)
+
 TypeScriptの`@throws` TSDoc宣言の漏れを検出する静的解析ツール。
 
 関数が投げる可能性のある例外を追跡し、`@throws`が正しく宣言されているかをチェックします。
