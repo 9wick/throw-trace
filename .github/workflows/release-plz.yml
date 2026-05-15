@@ -131,6 +131,7 @@ jobs:
     name: Publish npm package
     needs: [release-plz-release, build]
     runs-on: ubuntu-latest
+    environment: npm
     permissions:
       contents: read
       id-token: write
