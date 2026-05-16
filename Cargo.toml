@@ -7,7 +7,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.3"
+version = "0.1.4"
 edition = "2021"
 license = "MIT"
 rust-version = "1.85"
@@ -17,8 +17,8 @@ homepage = "https://github.com/9wick/throw-trace"
 
 [workspace.dependencies]
 # Internal crates
-throw-trace-core = { version = "0.1.3", path = "crates/throw-trace-core" }
-throw-trace-ts = { version = "0.1.3", path = "crates/throw-trace-ts" }
+throw-trace-core = { version = "0.1.4", path = "crates/throw-trace-core" }
+throw-trace-ts = { version = "0.1.4", path = "crates/throw-trace-ts" }
 
 # Parser
 oxc_parser = "=0.73.0"
