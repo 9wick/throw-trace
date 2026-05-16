@@ -197,8 +197,8 @@ jobs:
         run: |
           VERSION="${{ needs.release-plz-release.outputs.tag }}"
           VERSION="${VERSION#v}"
-          for i in 1 2 3; do
+          for i in 1 2 3 4 5 6; do
             if npx -y "throw-trace@${VERSION}" --help; then exit 0; fi
-            sleep 10
+            sleep 30
           done
           exit 1
