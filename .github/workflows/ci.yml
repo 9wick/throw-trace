@@ -31,11 +31,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --release
 
-  publish-dryrun:
-    name: cargo publish dry-run
+  package-check:
+    name: cargo package check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo publish --dry-run -p throw-trace
+      - run: cargo package --list -p throw-trace-core
+      - run: cargo package --list -p throw-trace-ts
+      - run: cargo package --list -p throw-trace
