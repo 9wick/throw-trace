@@ -146,4 +146,4 @@ Found 3 errors in 2 files
 
 ## ライセンス
 
-MIT License
+MIT License - see [LICENSE](LICENSE) for details
