@@ -80,8 +80,8 @@ mod tests {
         let comment = "/**\n * @throws {ValidationError} When input is invalid\n */";
         let throws = extract_throws_from_jsdoc(comment);
         assert_eq!(throws.len(), 1);
-        assert_eq!(throws[0].0, "ValidationError");
-        assert_eq!(throws[0].1.as_deref(), Some("When input is invalid"));
+        assert_eq!(throws[0].type_name, "ValidationError");
+        assert_eq!(throws[0].description.as_deref(), Some("When input is invalid"));
     }
 
     #[test]
@@ -90,8 +90,8 @@ mod tests {
             "/**\n * @throws {ValidationError}\n * @throws {NetworkError} Connection failed\n */";
         let throws = extract_throws_from_jsdoc(comment);
         assert_eq!(throws.len(), 2);
-        assert_eq!(throws[0].0, "ValidationError");
-        assert_eq!(throws[1].0, "NetworkError");
+        assert_eq!(throws[0].type_name, "ValidationError");
+        assert_eq!(throws[1].type_name, "NetworkError");
     }
 
     #[test]
@@ -99,7 +99,7 @@ mod tests {
         let comment = "/** @throws Error when something fails */";
         let throws = extract_throws_from_jsdoc(comment);
         assert_eq!(throws.len(), 1);
-        assert_eq!(throws[0].0, "Error");
+        assert_eq!(throws[0].type_name, "Error");
     }
 
     #[test]
@@ -114,10 +114,10 @@ mod tests {
         let comment = "/**\n * @throws {ValidationError | NetworkError} When something fails\n */";
         let throws = extract_throws_from_jsdoc(comment);
         assert_eq!(throws.len(), 2);
-        assert_eq!(throws[0].0, "ValidationError");
-        assert_eq!(throws[0].1.as_deref(), Some("When something fails"));
-        assert_eq!(throws[1].0, "NetworkError");
-        assert_eq!(throws[1].1.as_deref(), Some("When something fails"));
+        assert_eq!(throws[0].type_name, "ValidationError");
+        assert_eq!(throws[0].description.as_deref(), Some("When something fails"));
+        assert_eq!(throws[1].type_name, "NetworkError");
+        assert_eq!(throws[1].description.as_deref(), Some("When something fails"));
     }
 
     #[test]
@@ -125,9 +125,9 @@ mod tests {
         let comment = "/**\n * @throws {A | B | C}\n */";
         let throws = extract_throws_from_jsdoc(comment);
         assert_eq!(throws.len(), 3);
-        assert_eq!(throws[0].0, "A");
-        assert_eq!(throws[1].0, "B");
-        assert_eq!(throws[2].0, "C");
+        assert_eq!(throws[0].type_name, "A");
+        assert_eq!(throws[1].type_name, "B");
+        assert_eq!(throws[2].type_name, "C");
     }
 
     #[test]

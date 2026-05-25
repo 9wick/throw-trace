@@ -133,6 +133,7 @@ pub struct FunctionSignature {
 pub struct PropagatedThrow {
     pub error_type: ErrorType,
     pub origin: ThrowSite,
+    pub origin_function: FunctionId,
     pub path: Vec<FunctionId>,
 }
 

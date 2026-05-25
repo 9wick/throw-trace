@@ -41,6 +41,7 @@ fn collect_throws<S: std::hash::BuildHasher>(
             result.push(PropagatedThrow {
                 error_type: throw_site.error_type.clone(),
                 origin: throw_site.clone(),
+                origin_function: func_id.clone(),
                 path: path.to_owned(),
             });
         }
