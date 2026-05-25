@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.6](https://github.com/9wick/throw-trace/compare/v0.1.5...v0.1.6) - 2026-05-25
+
+### Added
+
+- add fix command for auto-inserting @throws declarations
+
+### Other
+
+- Merge pull request #14 from 9wick/feat/fix-command
+
 ## [0.1.5](https://github.com/9wick/throw-trace/compare/v0.1.4...v0.1.5) - 2026-05-16
 
 ### Other
