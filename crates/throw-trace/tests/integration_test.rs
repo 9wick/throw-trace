@@ -130,3 +130,159 @@ fn check_cross_file_circular_no_infinite_loop() {
         .failure()
         .stdout(predicate::str::contains("ErrorB propagates"));
 }
+
+#[test]
+fn fix_inserts_throws_declaration() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let test_file = temp_dir.path().join("test.ts");
+
+    std::fs::write(
+        &test_file,
+        r#"function validate(input: string) {
+  if (!input) {
+    throw new ValidationError("Input required");
+  }
+}
+
+class ValidationError extends Error {}
+"#,
+    )
+    .unwrap();
+
+    let mut cmd = Command::cargo_bin("throw-trace").unwrap();
+    cmd.arg("fix")
+        .arg(test_file.to_str().unwrap())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Fixed 1 file"));
+
+    let content = std::fs::read_to_string(&test_file).unwrap();
+    assert!(content.contains("@throws {ValidationError}"));
+}
+
+#[test]
+fn fix_does_not_modify_documented_function() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let test_file = temp_dir.path().join("test.ts");
+
+    let original = r#"/**
+ * @throws {ValidationError} When input is invalid
+ */
+function validate(input: string) {
+  if (!input) {
+    throw new ValidationError("Input required");
+  }
+}
+
+class ValidationError extends Error {}
+"#;
+
+    std::fs::write(&test_file, original).unwrap();
+
+    let mut cmd = Command::cargo_bin("throw-trace").unwrap();
+    cmd.arg("fix")
+        .arg(test_file.to_str().unwrap())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Fixed 0 file"));
+
+    let content = std::fs::read_to_string(&test_file).unwrap();
+    assert_eq!(content, original);
+}
+
+#[test]
+fn fix_nonexistent_path() {
+    let mut cmd = Command::cargo_bin("throw-trace").unwrap();
+    cmd.args(["fix", "nonexistent/path"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No TypeScript files found"));
+}
+
+#[test]
+fn fix_appends_to_existing_jsdoc() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let test_file = temp_dir.path().join("test.ts");
+
+    std::fs::write(
+        &test_file,
+        r#"/**
+ * Validates user input.
+ * @param input - The input to validate
+ */
+function validate(input: string) {
+  if (!input) {
+    throw new ValidationError("Input required");
+  }
+}
+
+class ValidationError extends Error {}
+"#,
+    )
+    .unwrap();
+
+    let mut cmd = Command::cargo_bin("throw-trace").unwrap();
+    cmd.arg("fix")
+        .arg(test_file.to_str().unwrap())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Fixed 1 file"));
+
+    let content = std::fs::read_to_string(&test_file).unwrap();
+    assert!(content.contains("@throws {ValidationError}"));
+    assert!(content.contains("@param input"));
+    assert!(content.contains("Validates user input"));
+}
+
+#[test]
+fn fix_appends_missing_throws_to_jsdoc_with_only_description() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let test_file = temp_dir.path().join("test.ts");
+
+    std::fs::write(
+        &test_file,
+        r#"/**
+ * Validates user input
+ */
+function validate(input: string) {
+  if (!input) {
+    throw new ValidationError("Input required");
+  }
+}
+
+class ValidationError extends Error {}
+"#,
+    )
+    .unwrap();
+
+    let mut cmd = Command::cargo_bin("throw-trace").unwrap();
+    cmd.arg("fix")
+        .arg(test_file.to_str().unwrap())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Fixed 1 file"));
+
+    let content = std::fs::read_to_string(&test_file).unwrap();
+    assert!(content.contains("@throws {ValidationError}"));
+    assert!(content.contains("Validates user input"));
+}
+
+#[test]
+fn fix_handles_crlf_line_endings() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let test_file = temp_dir.path().join("test.ts");
+
+    let crlf_content = "function validate(input: string) {\r\n  if (!input) {\r\n    throw new ValidationError(\"Input required\");\r\n  }\r\n}\r\n\r\nclass ValidationError extends Error {}\r\n";
+    std::fs::write(&test_file, crlf_content).unwrap();
+
+    let mut cmd = Command::cargo_bin("throw-trace").unwrap();
+    cmd.arg("fix")
+        .arg(test_file.to_str().unwrap())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Fixed 1 file"));
+
+    let content = std::fs::read_to_string(&test_file).unwrap();
+    assert!(content.contains("@throws {ValidationError}"));
+    assert!(content.contains("function validate"));
+}

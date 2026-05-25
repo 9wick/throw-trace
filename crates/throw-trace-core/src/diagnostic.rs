@@ -69,13 +69,15 @@ fn is_declared_with_resolution<R: TypeResolver>(
             (is_decl, None)
         }
         ErrorType::Unknown => {
-            let Some(resolved_type) = type_resolver.resolve_type(file_path, throw_span) else {
-                return (false, None);
-            };
-            let is_decl = declared_types.iter().any(|declared| {
-                type_resolver.is_assignable_to(file_path, &resolved_type, declared)
-            });
-            (is_decl, Some(resolved_type))
+            if let Some(resolved_type) = type_resolver.resolve_type(file_path, throw_span) {
+                let is_decl = declared_types.iter().any(|declared| {
+                    type_resolver.is_assignable_to(file_path, &resolved_type, declared)
+                });
+                (is_decl, Some(resolved_type))
+            } else {
+                let is_decl = declared_types.iter().any(|declared| *declared == "unknown");
+                (is_decl, None)
+            }
         }
         ErrorType::Rethrow(_) => (false, None),
     }

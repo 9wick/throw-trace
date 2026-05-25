@@ -1,10 +1,12 @@
 mod analyzer;
+mod fixer;
 mod loader;
 mod reporter;
 
 use analyzer::Analyzer;
 use anyhow::Result;
 use clap::Parser;
+use fixer::fix_files;
 use loader::FileLoader;
 use reporter::{report, OutputFormat};
 
@@ -31,6 +33,16 @@ enum Commands {
         /// Output format (text or json)
         #[arg(long, short = 'f', default_value = "text")]
         format: String,
+    },
+    /// Auto-insert missing @throws declarations
+    Fix {
+        /// Files or directories to fix
+        #[arg(default_value = ".")]
+        paths: Vec<String>,
+
+        /// Exclude patterns (glob)
+        #[arg(long, short = 'e')]
+        exclude: Vec<String>,
     },
 }
 
@@ -62,6 +74,24 @@ fn main() -> Result<()> {
                 std::process::exit(1);
             }
 
+            Ok(())
+        }
+        Some(Commands::Fix { paths, exclude }) => {
+            let loader = FileLoader::new(&exclude)?;
+            let files = loader.collect_ts_files(&paths)?;
+
+            if files.is_empty() {
+                println!("No TypeScript files found");
+                return Ok(());
+            }
+
+            let mut analyzer = Analyzer::new();
+            analyzer.analyze_files(&files)?;
+
+            let diagnostics = analyzer.generate_diagnostics();
+            let fixed_count = fix_files(&diagnostics)?;
+
+            println!("Fixed {fixed_count} file(s)");
             Ok(())
         }
         None => {

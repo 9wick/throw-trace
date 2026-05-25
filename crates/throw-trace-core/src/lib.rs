@@ -116,9 +116,12 @@ mod tests {
             location: Span { start: 10, end: 30 },
             error_type: ErrorType::Named("DBError".into()),
         };
+        let origin_function =
+            FunctionId::new(PathBuf::from("db.ts"), "query", Span { start: 0, end: 40 });
         let propagated = PropagatedThrow {
             error_type: ErrorType::Named("DBError".into()),
             origin: origin.clone(),
+            origin_function,
             path: vec![
                 FunctionId::new(PathBuf::from("a.ts"), "inner", Span { start: 0, end: 50 }),
                 FunctionId::new(PathBuf::from("b.ts"), "outer", Span { start: 0, end: 100 }),
@@ -135,13 +138,14 @@ mod tests {
             Span { start: 0, end: 200 },
         );
         let diagnostic = Diagnostic {
-            function: func_id,
+            function: func_id.clone(),
             missing_throws: vec![PropagatedThrow {
                 error_type: ErrorType::Named("ValidationError".into()),
                 origin: ThrowSite {
                     location: Span { start: 50, end: 80 },
                     error_type: ErrorType::Named("ValidationError".into()),
                 },
+                origin_function: func_id,
                 path: vec![],
             }],
         };

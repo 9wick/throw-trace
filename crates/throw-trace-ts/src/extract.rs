@@ -330,9 +330,9 @@ fn extract_instanceof_types(block: &oxc_ast::ast::BlockStatement) -> Vec<Compact
 fn parse_declared_throws(comment: &str, _span: oxc_span::Span) -> Vec<DeclaredThrow> {
     extract_throws_from_jsdoc(comment)
         .into_iter()
-        .map(|(type_name, description)| DeclaredThrow {
-            error_type: type_name.into(),
-            description: description.map(Into::into),
+        .map(|decl| DeclaredThrow {
+            error_type: decl.type_name.into(),
+            description: decl.description.map(Into::into),
             // Span is not tracked precisely for JSDoc; use zeroes as placeholder.
             span: Span { start: 0, end: 0 },
         })
