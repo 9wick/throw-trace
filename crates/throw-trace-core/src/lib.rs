@@ -741,6 +741,7 @@ mod tests {
     // 同名関数を2回呼び、1回目だけ try-catch 内にあるケース
     // 2回目は裸呼び出しなので throw が伝播するはず
     #[test]
+    #[allow(clippy::similar_names)]
     fn duplicate_call_uncaught_outside_try() {
         let mut signatures: HashMap<FunctionId, FunctionSignature> = HashMap::new();
         let mut graph = CallGraph::new();
