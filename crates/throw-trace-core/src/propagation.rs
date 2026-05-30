@@ -50,7 +50,31 @@ fn collect_throws<S: std::hash::BuildHasher>(
     for callee_id in graph.get_callees(func_id) {
         let mut new_path = path.to_owned();
         new_path.push(func_id.clone());
-        collect_throws(&callee_id, signatures, graph, result, visited, &new_path);
+
+        let mut callee_throws = Vec::new();
+        let mut callee_visited = visited.clone();
+        collect_throws(&callee_id, signatures, graph, &mut callee_throws, &mut callee_visited, &new_path);
+
+        let call_site_span = sig
+            .calls
+            .iter()
+            .find(|c| c.callee_name == callee_id.name)
+            .map(|c| c.location);
+
+        for propagated in callee_throws {
+            if let Some(span) = call_site_span {
+                let virtual_throw = ThrowSite {
+                    location: span,
+                    error_type: propagated.error_type.clone(),
+                };
+                if is_caught(&virtual_throw, sig) {
+                    continue;
+                }
+            }
+            result.push(propagated);
+        }
+
+        *visited = callee_visited;
     }
 }
 
@@ -64,8 +88,10 @@ fn is_caught(throw_site: &ThrowSite, sig: &FunctionSignature) -> bool {
             continue;
         }
 
-        if catch_has_rethrow(block, sig) {
-            continue;
+        let has_rethrow = catch_has_rethrow(block, sig);
+
+        if block.caught_types.is_empty() && !has_rethrow {
+            return true;
         }
 
         if let ErrorType::Named(throw_type) = &throw_site.error_type {

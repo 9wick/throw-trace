@@ -291,6 +291,9 @@ impl<'a> FunctionExtractor<'a> {
 fn extract_callee_info(expr: &Expression<'_>) -> (Option<CompactString>, Option<oxc_span::Span>) {
     match expr {
         Expression::Identifier(id) => (Some(id.name.as_str().into()), Some(id.span)),
+        Expression::StaticMemberExpression(member) => {
+            (Some(member.property.name.as_str().into()), Some(member.property.span))
+        }
         _ => (None, None),
     }
 }
@@ -311,20 +314,38 @@ fn extract_type_names(ts_type: &TSType<'_>) -> Vec<String> {
     }
 }
 
-fn extract_instanceof_types(block: &oxc_ast::ast::BlockStatement) -> Vec<CompactString> {
+pub(crate) fn extract_instanceof_types(block: &oxc_ast::ast::BlockStatement) -> Vec<CompactString> {
     let mut types = Vec::new();
     for stmt in &block.body {
         if let Statement::IfStatement(if_stmt) = stmt {
             if let Expression::BinaryExpression(bin) = &if_stmt.test {
                 if bin.operator == oxc_ast::ast::BinaryOperator::Instanceof {
                     if let Expression::Identifier(id) = &bin.right {
-                        types.push(id.name.as_str().into());
+                        if block_terminates(&if_stmt.consequent) {
+                            types.push(id.name.as_str().into());
+                        }
                     }
                 }
             }
         }
     }
     types
+}
+
+fn block_terminates(stmt: &Statement<'_>) -> bool {
+    match stmt {
+        Statement::ReturnStatement(_)
+        | Statement::ThrowStatement(_)
+        | Statement::BreakStatement(_)
+        | Statement::ContinueStatement(_) => true,
+        Statement::BlockStatement(block) => {
+            block.body.iter().any(|s| block_terminates(s))
+        }
+        Statement::IfStatement(if_stmt) => {
+            block_terminates(&if_stmt.consequent)
+        }
+        _ => false,
+    }
 }
 
 fn parse_declared_throws(comment: &str, _span: oxc_span::Span) -> Vec<DeclaredThrow> {

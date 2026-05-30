@@ -131,6 +131,66 @@ fn check_cross_file_circular_no_infinite_loop() {
         .stdout(predicate::str::contains("ErrorB propagates"));
 }
 
+// =============================================================
+// メンバ呼び出し（obj.method()）の throws 伝播
+// =============================================================
+
+#[test]
+fn member_call_propagates_throws_to_caller() {
+    let mut cmd = Command::cargo_bin("throw-trace").unwrap();
+    cmd.current_dir(workspace_root())
+        .args(["check", "tests/fixtures/member_call_propagation.ts"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("missing @throws"))
+        .stdout(predicate::str::contains("createUser"));
+}
+
+// =============================================================
+// catch-all（型ガードなし catch）による例外の全捕捉
+// =============================================================
+
+#[test]
+fn catch_all_suppresses_all_throws() {
+    let mut cmd = Command::cargo_bin("throw-trace").unwrap();
+    cmd.current_dir(workspace_root())
+        .args(["check", "tests/fixtures/catch_all_suppression.ts"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No issues found"));
+}
+
+// =============================================================
+// instanceof 捕捉 + rethrow 時の分岐終端判定
+// =============================================================
+
+// if-body が return で終端 → instanceof マッチ型は捕捉済み
+#[test]
+fn instanceof_with_return_catches_matched_type() {
+    let mut cmd = Command::cargo_bin("throw-trace").unwrap();
+    cmd.current_dir(workspace_root())
+        .args(["check", "tests/fixtures/instanceof_catch_with_rethrow.ts"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No issues found"));
+}
+
+// if-body が終端しない（fall-through）→ rethrow で投げ直される → 未捕捉
+#[test]
+fn instanceof_fallthrough_does_not_catch() {
+    let mut cmd = Command::cargo_bin("throw-trace").unwrap();
+    cmd.current_dir(workspace_root())
+        .args(["check", "tests/fixtures/instanceof_fallthrough_rethrow.ts"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("missing @throws"))
+        .stdout(predicate::str::contains("logAndRethrow"));
+}
+
+// =============================================================
+// fix テスト
+// =============================================================
+
 #[test]
 fn fix_inserts_throws_declaration() {
     let temp_dir = tempfile::tempdir().unwrap();
