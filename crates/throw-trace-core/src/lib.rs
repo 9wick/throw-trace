@@ -320,7 +320,7 @@ mod tests {
 
         graph.add_function(inner.clone());
         graph.add_function(outer.clone());
-        graph.add_call(&outer, &inner);
+        graph.add_call_with_location(&outer, &inner, Span { start: 50, end: 60 });
 
         let propagated = compute_propagated_throws(&outer, &signatures, &graph);
         assert_eq!(propagated.len(), 1);
@@ -798,13 +798,115 @@ mod tests {
 
         graph.add_function(callee.clone());
         graph.add_function(caller.clone());
-        graph.add_call(&caller, &callee);
+        graph.add_call_with_location(&caller, &callee, Span { start: 150, end: 160 });
+        graph.add_call_with_location(&caller, &callee, Span { start: 300, end: 310 });
 
         let propagated = compute_propagated_throws(&caller, &signatures, &graph);
         assert_eq!(
             propagated.len(),
             1,
             "second call to risky() is outside try-catch, should propagate"
+        );
+    }
+
+    // 同名メソッド（a.find() と b.find()）が別の関数を指すケース。
+    // a.find() は throw する側で try-catch 内、b.find() は throw しない側で try-catch 外。
+    // 名前ベースマッチングだと b.find() の call site span も a_find のエッジで拾われ、
+    // try-catch 外にある → uncaught と誤判定される。
+    #[test]
+    #[allow(clippy::similar_names)]
+    fn same_name_different_callee_false_positive() {
+        let mut signatures: HashMap<FunctionId, FunctionSignature> = HashMap::new();
+        let mut graph = CallGraph::new();
+
+        // a.find() — throws
+        let a_find = FunctionId::new(PathBuf::from("a.ts"), "find", Span { start: 0, end: 50 });
+        // b.find() — does NOT throw
+        let b_find = FunctionId::new(PathBuf::from("b.ts"), "find", Span { start: 0, end: 50 });
+
+        let caller =
+            FunctionId::new(PathBuf::from("main.ts"), "caller", Span { start: 0, end: 400 });
+
+        signatures.insert(
+            a_find.clone(),
+            FunctionSignature {
+                id: a_find.clone(),
+                name_span: Span { start: 9, end: 13 },
+                declared_throws: vec![],
+                direct_throws: vec![ThrowSite {
+                    location: Span { start: 20, end: 40 },
+                    error_type: ErrorType::Named("NotFoundError".into()),
+                }],
+                calls: vec![],
+                try_catch_blocks: vec![],
+                is_async: false,
+                class_name: None,
+            },
+        );
+
+        signatures.insert(
+            b_find.clone(),
+            FunctionSignature {
+                id: b_find.clone(),
+                name_span: Span { start: 9, end: 13 },
+                declared_throws: vec![],
+                direct_throws: vec![],
+                calls: vec![],
+                try_catch_blocks: vec![],
+                is_async: false,
+                class_name: None,
+            },
+        );
+
+        // caller: a.find() in try-catch (span 100-200), b.find() outside (span 300)
+        signatures.insert(
+            caller.clone(),
+            FunctionSignature {
+                id: caller.clone(),
+                name_span: Span { start: 9, end: 15 },
+                declared_throws: vec![],
+                direct_throws: vec![],
+                calls: vec![
+                    CallSite {
+                        callee_name: "find".into(),
+                        callee_span: Span { start: 150, end: 154 },
+                        location: Span { start: 150, end: 160 },
+                    },
+                    CallSite {
+                        callee_name: "find".into(),
+                        callee_span: Span { start: 300, end: 304 },
+                        location: Span { start: 300, end: 310 },
+                    },
+                ],
+                try_catch_blocks: vec![TryCatchBlock {
+                    try_span: Span { start: 100, end: 200 },
+                    catch_span: Some(Span { start: 200, end: 250 }),
+                    caught_types: vec![],
+                }],
+                is_async: false,
+                class_name: None,
+            },
+        );
+
+        graph.add_function(a_find.clone());
+        graph.add_function(b_find.clone());
+        graph.add_function(caller.clone());
+        // call graph edges with call site locations
+        graph.add_call_with_location(&caller, &a_find, Span { start: 150, end: 160 });
+        graph.add_call_with_location(&caller, &b_find, Span { start: 300, end: 310 });
+
+        let propagated = compute_propagated_throws(&caller, &signatures, &graph);
+        // a.find() is in try-catch → caught → should NOT propagate
+        // b.find() does NOT throw → nothing to propagate
+        // Expected: 0 propagated throws
+        // Actual with name-based matching: 1 (false positive)
+        // because b.find()'s call site (outside try) is matched to a_find's edge
+        assert_eq!(
+            propagated.len(),
+            0,
+            "a.find() is caught in try-catch, b.find() does not throw, \
+             but name-based matching causes false positive. Got: {:?}",
+            propagated.iter().map(|p| &p.error_type).collect::<Vec<_>>()
         );
     }
 }

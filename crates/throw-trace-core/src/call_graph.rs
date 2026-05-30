@@ -1,15 +1,20 @@
-use crate::FunctionId;
+use crate::{FunctionId, Span};
 use petgraph::graph::{DiGraph, NodeIndex};
 use std::collections::{HashMap, HashSet};
 
 pub struct CallGraph {
     graph: DiGraph<FunctionId, ()>,
     node_map: HashMap<FunctionId, NodeIndex>,
+    call_site_locations: HashMap<(NodeIndex, NodeIndex), Vec<Span>>,
 }
 
 impl CallGraph {
     pub fn new() -> Self {
-        Self { graph: DiGraph::new(), node_map: HashMap::new() }
+        Self {
+            graph: DiGraph::new(),
+            node_map: HashMap::new(),
+            call_site_locations: HashMap::new(),
+        }
     }
 
     pub fn add_function(&mut self, id: FunctionId) {
@@ -25,8 +30,32 @@ impl CallGraph {
 
     pub fn add_call(&mut self, from: &FunctionId, to: &FunctionId) {
         if let (Some(&from_idx), Some(&to_idx)) = (self.node_map.get(from), self.node_map.get(to)) {
-            self.graph.add_edge(from_idx, to_idx, ());
+            if !self.graph.contains_edge(from_idx, to_idx) {
+                self.graph.add_edge(from_idx, to_idx, ());
+            }
         }
+    }
+
+    pub fn add_call_with_location(
+        &mut self,
+        from: &FunctionId,
+        to: &FunctionId,
+        call_location: Span,
+    ) {
+        if let (Some(&from_idx), Some(&to_idx)) = (self.node_map.get(from), self.node_map.get(to)) {
+            if !self.graph.contains_edge(from_idx, to_idx) {
+                self.graph.add_edge(from_idx, to_idx, ());
+            }
+            self.call_site_locations.entry((from_idx, to_idx)).or_default().push(call_location);
+        }
+    }
+
+    pub fn get_call_site_locations(&self, from: &FunctionId, to: &FunctionId) -> &[Span] {
+        let (Some(&from_idx), Some(&to_idx)) = (self.node_map.get(from), self.node_map.get(to))
+        else {
+            return &[];
+        };
+        self.call_site_locations.get(&(from_idx, to_idx)).map_or(&[], Vec::as_slice)
     }
 
     pub fn get_callees(&self, caller: &FunctionId) -> Vec<FunctionId> {
