@@ -10,7 +10,7 @@ fn catalog_fix_is_idempotent() {
     let catalog_dir = workspace_root().join("tests/catalog");
     let entries: Vec<_> = std::fs::read_dir(&catalog_dir)
         .unwrap_or_else(|e| panic!("cannot read {}: {e}", catalog_dir.display()))
-        .filter_map(|e| e.ok())
+        .filter_map(Result::ok)
         .filter(|e| e.path().extension().is_some_and(|ext| ext == "ts"))
         .collect();
 
@@ -42,13 +42,12 @@ fn catalog_fix_is_idempotent() {
         }
     }
 
-    if !failures.is_empty() {
-        panic!(
-            "catalog idempotency check failed for {} file(s):\n\n{}",
-            failures.len(),
-            failures.join("\n\n")
-        );
-    }
+    assert!(
+        failures.is_empty(),
+        "catalog idempotency check failed for {} file(s):\n\n{}",
+        failures.len(),
+        failures.join("\n\n")
+    );
 }
 
 fn diff_strings(original: &str, modified: &str) -> String {
