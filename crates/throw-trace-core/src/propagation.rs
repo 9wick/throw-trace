@@ -53,20 +53,22 @@ fn collect_throws<S: std::hash::BuildHasher>(
 
         let mut callee_throws = Vec::new();
         let mut callee_visited = visited.clone();
-        collect_throws(&callee_id, signatures, graph, &mut callee_throws, &mut callee_visited, &new_path);
+        collect_throws(
+            &callee_id,
+            signatures,
+            graph,
+            &mut callee_throws,
+            &mut callee_visited,
+            &new_path,
+        );
 
-        let call_site_span = sig
-            .calls
-            .iter()
-            .find(|c| c.callee_name == callee_id.name)
-            .map(|c| c.location);
+        let call_site_span =
+            sig.calls.iter().find(|c| c.callee_name == callee_id.name).map(|c| c.location);
 
         for propagated in callee_throws {
             if let Some(span) = call_site_span {
-                let virtual_throw = ThrowSite {
-                    location: span,
-                    error_type: propagated.error_type.clone(),
-                };
+                let virtual_throw =
+                    ThrowSite { location: span, error_type: propagated.error_type.clone() };
                 if is_caught(&virtual_throw, sig) {
                     continue;
                 }

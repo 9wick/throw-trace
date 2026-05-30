@@ -338,12 +338,8 @@ fn block_terminates(stmt: &Statement<'_>) -> bool {
         | Statement::ThrowStatement(_)
         | Statement::BreakStatement(_)
         | Statement::ContinueStatement(_) => true,
-        Statement::BlockStatement(block) => {
-            block.body.iter().any(|s| block_terminates(s))
-        }
-        Statement::IfStatement(if_stmt) => {
-            block_terminates(&if_stmt.consequent)
-        }
+        Statement::BlockStatement(block) => block.body.iter().any(|s| block_terminates(s)),
+        Statement::IfStatement(if_stmt) => block_terminates(&if_stmt.consequent),
         _ => false,
     }
 }

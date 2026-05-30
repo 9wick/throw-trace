@@ -700,11 +700,8 @@ mod tests {
         let mut signatures: HashMap<FunctionId, FunctionSignature> = HashMap::new();
         let graph = CallGraph::new();
 
-        let func = FunctionId::new(
-            PathBuf::from("a.ts"),
-            "handleTarget",
-            Span { start: 0, end: 300 },
-        );
+        let func =
+            FunctionId::new(PathBuf::from("a.ts"), "handleTarget", Span { start: 0, end: 300 });
 
         signatures.insert(
             func.clone(),
@@ -740,5 +737,4 @@ mod tests {
             propagated.iter().map(|p| &p.error_type).collect::<Vec<_>>()
         );
     }
-
 }
