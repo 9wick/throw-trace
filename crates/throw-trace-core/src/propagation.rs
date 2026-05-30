@@ -62,18 +62,13 @@ fn collect_throws<S: std::hash::BuildHasher>(
             &new_path,
         );
 
-        let call_site_spans: Vec<_> = sig
-            .calls
-            .iter()
-            .filter(|c| c.callee_name == callee_id.name)
-            .map(|c| c.location)
-            .collect();
+        let call_site_locations = graph.get_call_site_locations(func_id, &callee_id);
 
         for propagated in callee_throws {
-            let any_uncaught = if call_site_spans.is_empty() {
+            let any_uncaught = if call_site_locations.is_empty() {
                 true
             } else {
-                call_site_spans.iter().any(|&span| {
+                call_site_locations.iter().any(|&span| {
                     let virtual_throw =
                         ThrowSite { location: span, error_type: propagated.error_type.clone() };
                     !is_caught(&virtual_throw, sig)

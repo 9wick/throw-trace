@@ -250,6 +250,18 @@ fn duplicate_call_uncaught_outside_try() {
         .stdout(predicate::str::contains("callTwice"));
 }
 
+// 同名メソッド（a.find() と b.find()）が別関数を指すケースで
+// try-catch 内の呼び出しが正しく caught と判定される
+#[test]
+fn same_name_member_call_no_false_positive() {
+    let mut cmd = Command::cargo_bin("throw-trace").unwrap();
+    cmd.current_dir(workspace_root())
+        .args(["check", "tests/fixtures/same_name_member_call.ts"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No issues found"));
+}
+
 // =============================================================
 // fix テスト
 // =============================================================

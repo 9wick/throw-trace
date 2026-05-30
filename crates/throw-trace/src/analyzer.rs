@@ -183,7 +183,7 @@ impl Analyzer {
             sig_by_name.entry(sig.id.name.as_str()).or_default().push(&sig.id);
         }
 
-        let calls_to_add: Vec<(FunctionId, FunctionId)> = self
+        let calls_to_add: Vec<(FunctionId, FunctionId, Span)> = self
             .signatures
             .values()
             .flat_map(|sig| {
@@ -193,7 +193,7 @@ impl Analyzer {
                         if let Some(callee_id) =
                             sig_by_file_and_line.get(&(def_file.clone(), *def_line))
                         {
-                            return Some((sig.id.clone(), (*callee_id).clone()));
+                            return Some((sig.id.clone(), (*callee_id).clone(), call.location));
                         }
                     }
 
@@ -201,13 +201,13 @@ impl Analyzer {
                     candidates
                         .iter()
                         .find(|c| c.file_path == sig.id.file_path)
-                        .map(|callee_id| (sig.id.clone(), (*callee_id).clone()))
+                        .map(|callee_id| (sig.id.clone(), (*callee_id).clone(), call.location))
                 })
             })
             .collect();
 
-        for (caller, callee) in calls_to_add {
-            self.graph.add_call(&caller, &callee);
+        for (caller, callee, location) in calls_to_add {
+            self.graph.add_call_with_location(&caller, &callee, location);
         }
     }
 
