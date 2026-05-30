@@ -55,9 +55,7 @@ impl CallGraph {
         else {
             return &[];
         };
-        self.call_site_locations
-            .get(&(from_idx, to_idx))
-            .map_or(&[], Vec::as_slice)
+        self.call_site_locations.get(&(from_idx, to_idx)).map_or(&[], Vec::as_slice)
     }
 
     pub fn get_callees(&self, caller: &FunctionId) -> Vec<FunctionId> {

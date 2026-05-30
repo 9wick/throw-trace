@@ -820,11 +820,9 @@ mod tests {
         let mut graph = CallGraph::new();
 
         // a.find() — throws
-        let a_find =
-            FunctionId::new(PathBuf::from("a.ts"), "find", Span { start: 0, end: 50 });
+        let a_find = FunctionId::new(PathBuf::from("a.ts"), "find", Span { start: 0, end: 50 });
         // b.find() — does NOT throw
-        let b_find =
-            FunctionId::new(PathBuf::from("b.ts"), "find", Span { start: 0, end: 50 });
+        let b_find = FunctionId::new(PathBuf::from("b.ts"), "find", Span { start: 0, end: 50 });
 
         let caller =
             FunctionId::new(PathBuf::from("main.ts"), "caller", Span { start: 0, end: 400 });
