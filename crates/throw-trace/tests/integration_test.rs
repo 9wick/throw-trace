@@ -187,6 +187,34 @@ fn instanceof_fallthrough_does_not_catch() {
         .stdout(predicate::str::contains("logAndRethrow"));
 }
 
+// instanceof ブロック内で条件付き return → 一部経路のみ終端 → 未捕捉
+#[test]
+fn instanceof_partial_termination_does_not_catch() {
+    let mut cmd = Command::cargo_bin("throw-trace").unwrap();
+    cmd.current_dir(workspace_root())
+        .args(["check", "tests/fixtures/instanceof_partial_termination.ts"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("missing @throws"))
+        .stdout(predicate::str::contains("partialHandle"));
+}
+
+// =============================================================
+// 同名関数の複数呼び出しと部分的 try-catch
+// =============================================================
+
+// 1回目は try-catch 内、2回目は裸 → 2回目の伝播を検出
+#[test]
+fn duplicate_call_uncaught_outside_try() {
+    let mut cmd = Command::cargo_bin("throw-trace").unwrap();
+    cmd.current_dir(workspace_root())
+        .args(["check", "tests/fixtures/duplicate_call_partial_catch.ts"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("missing @throws"))
+        .stdout(predicate::str::contains("callTwice"));
+}
+
 // =============================================================
 // fix テスト
 // =============================================================

@@ -737,4 +737,73 @@ mod tests {
             propagated.iter().map(|p| &p.error_type).collect::<Vec<_>>()
         );
     }
+
+    // 同名関数を2回呼び、1回目だけ try-catch 内にあるケース
+    // 2回目は裸呼び出しなので throw が伝播するはず
+    #[test]
+    fn duplicate_call_uncaught_outside_try() {
+        let mut signatures: HashMap<FunctionId, FunctionSignature> = HashMap::new();
+        let mut graph = CallGraph::new();
+
+        let callee = FunctionId::new(PathBuf::from("a.ts"), "risky", Span { start: 0, end: 50 });
+        let caller =
+            FunctionId::new(PathBuf::from("a.ts"), "callTwice", Span { start: 100, end: 400 });
+
+        signatures.insert(
+            callee.clone(),
+            FunctionSignature {
+                id: callee.clone(),
+                name_span: Span { start: 9, end: 14 },
+                declared_throws: vec![],
+                direct_throws: vec![ThrowSite {
+                    location: Span { start: 20, end: 40 },
+                    error_type: ErrorType::Named("SomeError".into()),
+                }],
+                calls: vec![],
+                try_catch_blocks: vec![],
+                is_async: false,
+                class_name: None,
+            },
+        );
+
+        signatures.insert(
+            caller.clone(),
+            FunctionSignature {
+                id: caller.clone(),
+                name_span: Span { start: 109, end: 118 },
+                declared_throws: vec![],
+                direct_throws: vec![],
+                calls: vec![
+                    CallSite {
+                        callee_name: "risky".into(),
+                        callee_span: Span { start: 150, end: 155 },
+                        location: Span { start: 150, end: 160 },
+                    },
+                    CallSite {
+                        callee_name: "risky".into(),
+                        callee_span: Span { start: 300, end: 305 },
+                        location: Span { start: 300, end: 310 },
+                    },
+                ],
+                try_catch_blocks: vec![TryCatchBlock {
+                    try_span: Span { start: 130, end: 200 },
+                    catch_span: Some(Span { start: 200, end: 250 }),
+                    caught_types: vec![],
+                }],
+                is_async: false,
+                class_name: None,
+            },
+        );
+
+        graph.add_function(callee.clone());
+        graph.add_function(caller.clone());
+        graph.add_call(&caller, &callee);
+
+        let propagated = compute_propagated_throws(&caller, &signatures, &graph);
+        assert_eq!(
+            propagated.len(),
+            1,
+            "second call to risky() is outside try-catch, should propagate"
+        );
+    }
 }

@@ -338,8 +338,31 @@ fn block_terminates(stmt: &Statement<'_>) -> bool {
         | Statement::ThrowStatement(_)
         | Statement::BreakStatement(_)
         | Statement::ContinueStatement(_) => true,
-        Statement::BlockStatement(block) => block.body.iter().any(|s| block_terminates(s)),
-        Statement::IfStatement(if_stmt) => block_terminates(&if_stmt.consequent),
+        Statement::BlockStatement(block) => {
+            block.body.iter().any(|s| unconditionally_terminates(s))
+        }
+        Statement::IfStatement(if_stmt) => {
+            let then_terminates = block_terminates(&if_stmt.consequent);
+            let else_terminates =
+                if_stmt.alternate.as_ref().is_some_and(|alt| block_terminates(alt));
+            then_terminates && else_terminates
+        }
+        _ => false,
+    }
+}
+
+fn unconditionally_terminates(stmt: &Statement<'_>) -> bool {
+    match stmt {
+        Statement::ReturnStatement(_)
+        | Statement::ThrowStatement(_)
+        | Statement::BreakStatement(_)
+        | Statement::ContinueStatement(_) => true,
+        Statement::IfStatement(if_stmt) => {
+            let then_terminates = block_terminates(&if_stmt.consequent);
+            let else_terminates =
+                if_stmt.alternate.as_ref().is_some_and(|alt| block_terminates(alt));
+            then_terminates && else_terminates
+        }
         _ => false,
     }
 }
