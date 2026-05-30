@@ -131,6 +131,129 @@ fn check_cross_file_circular_no_infinite_loop() {
         .stdout(predicate::str::contains("ErrorB propagates"));
 }
 
+// =============================================================
+// メンバ呼び出し（obj.method()）の throws 伝播
+// =============================================================
+
+#[test]
+fn member_call_propagates_throws_to_caller() {
+    let mut cmd = Command::cargo_bin("throw-trace").unwrap();
+    cmd.current_dir(workspace_root())
+        .args(["check", "tests/fixtures/member_call_propagation.ts"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("missing @throws"))
+        .stdout(predicate::str::contains("createUser"));
+}
+
+// =============================================================
+// catch-all（型ガードなし catch）による例外の全捕捉
+// =============================================================
+
+#[test]
+fn catch_all_suppresses_all_throws() {
+    let mut cmd = Command::cargo_bin("throw-trace").unwrap();
+    cmd.current_dir(workspace_root())
+        .args(["check", "tests/fixtures/catch_all_suppression.ts"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No issues found"));
+}
+
+// =============================================================
+// instanceof 捕捉 + rethrow 時の分岐終端判定
+// =============================================================
+
+// if-body が return で終端 → instanceof マッチ型は捕捉済み
+#[test]
+fn instanceof_with_return_catches_matched_type() {
+    let mut cmd = Command::cargo_bin("throw-trace").unwrap();
+    cmd.current_dir(workspace_root())
+        .args(["check", "tests/fixtures/instanceof_catch_with_rethrow.ts"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No issues found"));
+}
+
+// if-body が終端しない（fall-through）→ rethrow で投げ直される → 未捕捉
+#[test]
+fn instanceof_fallthrough_does_not_catch() {
+    let mut cmd = Command::cargo_bin("throw-trace").unwrap();
+    cmd.current_dir(workspace_root())
+        .args(["check", "tests/fixtures/instanceof_fallthrough_rethrow.ts"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("missing @throws"))
+        .stdout(predicate::str::contains("logAndRethrow"));
+}
+
+// instanceof ブロック内で条件付き return → 一部経路のみ終端 → 未捕捉
+#[test]
+fn instanceof_partial_termination_does_not_catch() {
+    let mut cmd = Command::cargo_bin("throw-trace").unwrap();
+    cmd.current_dir(workspace_root())
+        .args(["check", "tests/fixtures/instanceof_partial_termination.ts"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("missing @throws"))
+        .stdout(predicate::str::contains("partialHandle"));
+}
+
+// instanceof 分岐内で throw e（catch param 再送出）→ 捕捉ではなく再送出
+#[test]
+fn instanceof_rethrow_catch_param_does_not_catch() {
+    let mut cmd = Command::cargo_bin("throw-trace").unwrap();
+    cmd.current_dir(workspace_root())
+        .args(["check", "tests/fixtures/instanceof_rethrow_in_branch.ts"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("missing @throws"))
+        .stdout(predicate::str::contains("rethrowMatched"));
+}
+
+// 条件付き throw e + return → 再送出パスが到達可能なので未捕捉
+#[test]
+fn instanceof_conditional_rethrow_with_return_does_not_catch() {
+    let mut cmd = Command::cargo_bin("throw-trace").unwrap();
+    cmd.current_dir(workspace_root())
+        .args(["check", "tests/fixtures/instanceof_conditional_rethrow_with_return.ts"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("missing @throws"))
+        .stdout(predicate::str::contains("conditionalRethrow"));
+}
+
+// if/else 全分岐 return 後の到達不能 throw e → 捕捉済み
+#[test]
+fn instanceof_unreachable_rethrow_still_caught() {
+    let mut cmd = Command::cargo_bin("throw-trace").unwrap();
+    cmd.current_dir(workspace_root())
+        .args(["check", "tests/fixtures/instanceof_unreachable_rethrow.ts"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No issues found"));
+}
+
+// =============================================================
+// 同名関数の複数呼び出しと部分的 try-catch
+// =============================================================
+
+// 1回目は try-catch 内、2回目は裸 → 2回目の伝播を検出
+#[test]
+fn duplicate_call_uncaught_outside_try() {
+    let mut cmd = Command::cargo_bin("throw-trace").unwrap();
+    cmd.current_dir(workspace_root())
+        .args(["check", "tests/fixtures/duplicate_call_partial_catch.ts"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("missing @throws"))
+        .stdout(predicate::str::contains("callTwice"));
+}
+
+// =============================================================
+// fix テスト
+// =============================================================
+
 #[test]
 fn fix_inserts_throws_declaration() {
     let temp_dir = tempfile::tempdir().unwrap();

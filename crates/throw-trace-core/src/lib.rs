@@ -327,8 +327,11 @@ mod tests {
         assert_eq!(propagated[0].error_type, ErrorType::Named("InnerError".into()));
     }
 
+    // instanceof でマッチした型は rethrow があっても捕捉済みとする
+    // rethrow 自体は catch-param の再送出として別途扱われ、
+    // マッチしなかった型のみが伝播する
     #[test]
-    fn rethrow_in_catch_propagates_original() {
+    fn instanceof_matched_type_caught_even_with_rethrow() {
         let mut signatures: HashMap<FunctionId, FunctionSignature> = HashMap::new();
         let graph = CallGraph::new();
 
@@ -362,8 +365,10 @@ mod tests {
         );
 
         let propagated = compute_propagated_throws(&func, &signatures, &graph);
-        assert_eq!(propagated.len(), 1);
-        assert_eq!(propagated[0].error_type, ErrorType::Named("SomeError".into()));
+        assert!(
+            propagated.is_empty(),
+            "instanceof-matched type should be caught even when rethrow exists"
+        );
     }
 
     #[test]
@@ -609,5 +614,197 @@ mod tests {
 
         assert_eq!(violations.len(), 1);
         assert_eq!(violations[0].illegal_throws[0], ErrorType::Named("IOError".into()));
+    }
+
+    // =============================================================
+    // catch-all / catch_has_rethrow の伝播判定
+    // =============================================================
+
+    #[test]
+    fn bare_catch_suppresses_all_throws() {
+        let mut signatures: HashMap<FunctionId, FunctionSignature> = HashMap::new();
+        let graph = CallGraph::new();
+
+        let func = FunctionId::new(PathBuf::from("a.ts"), "safe", Span { start: 0, end: 200 });
+
+        signatures.insert(
+            func.clone(),
+            FunctionSignature {
+                id: func.clone(),
+                name_span: Span { start: 9, end: 13 },
+                declared_throws: vec![],
+                direct_throws: vec![ThrowSite {
+                    location: Span { start: 20, end: 50 },
+                    error_type: ErrorType::Named("MyError".into()),
+                }],
+                calls: vec![],
+                try_catch_blocks: vec![TryCatchBlock {
+                    try_span: Span { start: 10, end: 100 },
+                    catch_span: Some(Span { start: 100, end: 180 }),
+                    caught_types: vec![],
+                }],
+                is_async: false,
+                class_name: None,
+            },
+        );
+
+        let propagated = compute_propagated_throws(&func, &signatures, &graph);
+        assert!(
+            propagated.is_empty(),
+            "catch-all should suppress all throws, but got: {:?}",
+            propagated.iter().map(|p| &p.error_type).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn rethrow_in_bare_catch_propagates_throws() {
+        let mut signatures: HashMap<FunctionId, FunctionSignature> = HashMap::new();
+        let graph = CallGraph::new();
+
+        let func = FunctionId::new(PathBuf::from("a.ts"), "wrapper", Span { start: 0, end: 200 });
+
+        signatures.insert(
+            func.clone(),
+            FunctionSignature {
+                id: func.clone(),
+                name_span: Span { start: 9, end: 16 },
+                declared_throws: vec![],
+                direct_throws: vec![
+                    ThrowSite {
+                        location: Span { start: 20, end: 50 },
+                        error_type: ErrorType::Named("MyError".into()),
+                    },
+                    ThrowSite {
+                        location: Span { start: 120, end: 130 },
+                        error_type: ErrorType::Rethrow("e".into()),
+                    },
+                ],
+                calls: vec![],
+                try_catch_blocks: vec![TryCatchBlock {
+                    try_span: Span { start: 10, end: 100 },
+                    catch_span: Some(Span { start: 100, end: 180 }),
+                    caught_types: vec![],
+                }],
+                is_async: false,
+                class_name: None,
+            },
+        );
+
+        let propagated = compute_propagated_throws(&func, &signatures, &graph);
+        assert_eq!(propagated.len(), 1, "catch-all with rethrow should still propagate");
+        assert_eq!(propagated[0].error_type, ErrorType::Named("MyError".into()));
+    }
+
+    #[test]
+    fn rethrow_in_catch_does_not_discard_instanceof_match() {
+        let mut signatures: HashMap<FunctionId, FunctionSignature> = HashMap::new();
+        let graph = CallGraph::new();
+
+        let func =
+            FunctionId::new(PathBuf::from("a.ts"), "handleTarget", Span { start: 0, end: 300 });
+
+        signatures.insert(
+            func.clone(),
+            FunctionSignature {
+                id: func.clone(),
+                name_span: Span { start: 9, end: 21 },
+                declared_throws: vec![],
+                direct_throws: vec![
+                    ThrowSite {
+                        location: Span { start: 20, end: 50 },
+                        error_type: ErrorType::Named("TargetError".into()),
+                    },
+                    ThrowSite {
+                        location: Span { start: 220, end: 230 },
+                        error_type: ErrorType::Rethrow("e".into()),
+                    },
+                ],
+                calls: vec![],
+                try_catch_blocks: vec![TryCatchBlock {
+                    try_span: Span { start: 10, end: 100 },
+                    catch_span: Some(Span { start: 100, end: 250 }),
+                    caught_types: vec!["TargetError".into()],
+                }],
+                is_async: false,
+                class_name: None,
+            },
+        );
+
+        let propagated = compute_propagated_throws(&func, &signatures, &graph);
+        assert!(
+            propagated.is_empty(),
+            "TargetError is caught by instanceof, should not propagate, but got: {:?}",
+            propagated.iter().map(|p| &p.error_type).collect::<Vec<_>>()
+        );
+    }
+
+    // 同名関数を2回呼び、1回目だけ try-catch 内にあるケース
+    // 2回目は裸呼び出しなので throw が伝播するはず
+    #[test]
+    #[allow(clippy::similar_names)]
+    fn duplicate_call_uncaught_outside_try() {
+        let mut signatures: HashMap<FunctionId, FunctionSignature> = HashMap::new();
+        let mut graph = CallGraph::new();
+
+        let callee = FunctionId::new(PathBuf::from("a.ts"), "risky", Span { start: 0, end: 50 });
+        let caller =
+            FunctionId::new(PathBuf::from("a.ts"), "callTwice", Span { start: 100, end: 400 });
+
+        signatures.insert(
+            callee.clone(),
+            FunctionSignature {
+                id: callee.clone(),
+                name_span: Span { start: 9, end: 14 },
+                declared_throws: vec![],
+                direct_throws: vec![ThrowSite {
+                    location: Span { start: 20, end: 40 },
+                    error_type: ErrorType::Named("SomeError".into()),
+                }],
+                calls: vec![],
+                try_catch_blocks: vec![],
+                is_async: false,
+                class_name: None,
+            },
+        );
+
+        signatures.insert(
+            caller.clone(),
+            FunctionSignature {
+                id: caller.clone(),
+                name_span: Span { start: 109, end: 118 },
+                declared_throws: vec![],
+                direct_throws: vec![],
+                calls: vec![
+                    CallSite {
+                        callee_name: "risky".into(),
+                        callee_span: Span { start: 150, end: 155 },
+                        location: Span { start: 150, end: 160 },
+                    },
+                    CallSite {
+                        callee_name: "risky".into(),
+                        callee_span: Span { start: 300, end: 305 },
+                        location: Span { start: 300, end: 310 },
+                    },
+                ],
+                try_catch_blocks: vec![TryCatchBlock {
+                    try_span: Span { start: 130, end: 200 },
+                    catch_span: Some(Span { start: 200, end: 250 }),
+                    caught_types: vec![],
+                }],
+                is_async: false,
+                class_name: None,
+            },
+        );
+
+        graph.add_function(callee.clone());
+        graph.add_function(caller.clone());
+        graph.add_call(&caller, &callee);
+
+        let propagated = compute_propagated_throws(&caller, &signatures, &graph);
+        assert_eq!(
+            propagated.len(),
+            1,
+            "second call to risky() is outside try-catch, should propagate"
+        );
     }
 }

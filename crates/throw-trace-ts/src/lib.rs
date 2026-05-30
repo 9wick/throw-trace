@@ -210,6 +210,149 @@ try {
     }
 
     #[test]
+    fn instanceof_without_return_not_in_caught_types() {
+        let source = r"
+try {
+    validate();
+} catch (e) {
+    if (e instanceof SomeError) {
+        console.log(e);
+    }
+    throw e;
+}
+";
+        let blocks = extract_try_catch_blocks(source);
+        assert_eq!(blocks.len(), 1);
+        assert!(
+            blocks[0].caught_types.is_empty(),
+            "instanceof without terminal statement should not be in caught_types"
+        );
+    }
+
+    #[test]
+    fn instanceof_with_conditional_return_not_in_caught_types() {
+        let source = r"
+try {
+    validate();
+} catch (e) {
+    if (e instanceof SomeError) {
+        if (cond) return;
+    }
+    throw e;
+}
+";
+        let blocks = extract_try_catch_blocks(source);
+        assert_eq!(blocks.len(), 1);
+        assert!(
+            blocks[0].caught_types.is_empty(),
+            "instanceof with partial termination should not be in caught_types"
+        );
+    }
+
+    #[test]
+    fn instanceof_unreachable_rethrow_after_if_else_return_in_caught_types() {
+        let source = r"
+try {
+    validate();
+} catch (e) {
+    if (e instanceof SomeError) {
+        if (cond) return 1;
+        else return 2;
+        throw e;
+    }
+    throw e;
+}
+";
+        let blocks = extract_try_catch_blocks(source);
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(
+            blocks[0].caught_types.len(),
+            1,
+            "throw e after if/else that both return is unreachable, SomeError should be caught"
+        );
+    }
+
+    #[test]
+    fn instanceof_with_conditional_rethrow_and_return_not_in_caught_types() {
+        let source = r"
+try {
+    validate();
+} catch (e) {
+    if (e instanceof SomeError) {
+        if (cond) throw e;
+        return;
+    }
+    throw e;
+}
+";
+        let blocks = extract_try_catch_blocks(source);
+        assert_eq!(blocks.len(), 1);
+        assert!(
+            blocks[0].caught_types.is_empty(),
+            "conditional throw e is a reachable rethrow, return after it does not make it caught"
+        );
+    }
+
+    #[test]
+    fn instanceof_with_rethrow_catch_param_not_in_caught_types() {
+        let source = r"
+try {
+    validate();
+} catch (e) {
+    if (e instanceof SomeError) {
+        throw e;
+    }
+}
+";
+        let blocks = extract_try_catch_blocks(source);
+        assert_eq!(blocks.len(), 1);
+        assert!(
+            blocks[0].caught_types.is_empty(),
+            "throw e in instanceof branch is a rethrow, not a catch"
+        );
+    }
+
+    #[test]
+    fn instanceof_with_throw_new_in_caught_types() {
+        let source = r"
+try {
+    validate();
+} catch (e) {
+    if (e instanceof SomeError) {
+        throw new WrappedError(e);
+    }
+    throw e;
+}
+";
+        let blocks = extract_try_catch_blocks(source);
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(
+            blocks[0].caught_types.len(),
+            1,
+            "throw new replaces the error, so SomeError is caught"
+        );
+        assert_eq!(blocks[0].caught_types[0].as_str(), "SomeError");
+    }
+
+    #[test]
+    fn instanceof_with_return_in_caught_types() {
+        let source = r"
+try {
+    validate();
+} catch (e) {
+    if (e instanceof SomeError) {
+        return null;
+    }
+    throw e;
+}
+";
+        let blocks = extract_try_catch_blocks(source);
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].caught_types.len(), 1);
+        assert_eq!(blocks[0].caught_types[0].as_str(), "SomeError");
+    }
+
+    #[test]
     fn extract_try_catch_no_catch() {
         let source = r"
 try {
