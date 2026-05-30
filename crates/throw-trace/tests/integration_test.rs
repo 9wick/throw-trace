@@ -199,6 +199,18 @@ fn instanceof_partial_termination_does_not_catch() {
         .stdout(predicate::str::contains("partialHandle"));
 }
 
+// instanceof 分岐内で throw e（catch param 再送出）→ 捕捉ではなく再送出
+#[test]
+fn instanceof_rethrow_catch_param_does_not_catch() {
+    let mut cmd = Command::cargo_bin("throw-trace").unwrap();
+    cmd.current_dir(workspace_root())
+        .args(["check", "tests/fixtures/instanceof_rethrow_in_branch.ts"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("missing @throws"))
+        .stdout(predicate::str::contains("rethrowMatched"));
+}
+
 // =============================================================
 // 同名関数の複数呼び出しと部分的 try-catch
 // =============================================================

@@ -1,4 +1,5 @@
 use oxc_allocator::Allocator;
+use oxc_ast::ast::BindingPatternKind;
 use oxc_ast_visit::{walk, Visit};
 use oxc_parser::Parser;
 use oxc_span::SourceType;
@@ -22,7 +23,14 @@ impl<'a> Visit<'a> for TryCatchExtractor {
 
         let (catch_span, caught_types) = if let Some(handler) = &stmt.handler {
             let span = Some(Span { start: handler.span.start, end: handler.span.end });
-            let types = extract_instanceof_types(&handler.body);
+            let catch_param = handler.param.as_ref().and_then(|p| {
+                if let BindingPatternKind::BindingIdentifier(id) = &p.pattern.kind {
+                    Some(id.name.as_str())
+                } else {
+                    None
+                }
+            });
+            let types = extract_instanceof_types(&handler.body, catch_param);
             (span, types)
         } else {
             (None, Vec::new())
