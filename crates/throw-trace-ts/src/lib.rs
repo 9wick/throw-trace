@@ -250,6 +250,29 @@ try {
     }
 
     #[test]
+    fn instanceof_unreachable_rethrow_after_if_else_return_in_caught_types() {
+        let source = r"
+try {
+    validate();
+} catch (e) {
+    if (e instanceof SomeError) {
+        if (cond) return 1;
+        else return 2;
+        throw e;
+    }
+    throw e;
+}
+";
+        let blocks = extract_try_catch_blocks(source);
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(
+            blocks[0].caught_types.len(),
+            1,
+            "throw e after if/else that both return is unreachable, SomeError should be caught"
+        );
+    }
+
+    #[test]
     fn instanceof_with_conditional_rethrow_and_return_not_in_caught_types() {
         let source = r"
 try {

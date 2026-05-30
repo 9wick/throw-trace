@@ -223,6 +223,17 @@ fn instanceof_conditional_rethrow_with_return_does_not_catch() {
         .stdout(predicate::str::contains("conditionalRethrow"));
 }
 
+// if/else 全分岐 return 後の到達不能 throw e → 捕捉済み
+#[test]
+fn instanceof_unreachable_rethrow_still_caught() {
+    let mut cmd = Command::cargo_bin("throw-trace").unwrap();
+    cmd.current_dir(workspace_root())
+        .args(["check", "tests/fixtures/instanceof_unreachable_rethrow.ts"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No issues found"));
+}
+
 // =============================================================
 // 同名関数の複数呼び出しと部分的 try-catch
 // =============================================================

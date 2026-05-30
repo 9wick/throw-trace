@@ -378,13 +378,23 @@ fn may_rethrow_catch_param(stmt: &Statement<'_>, catch_param: Option<&str>) -> b
 }
 
 fn unconditionally_terminates_ignoring_rethrow(stmt: &Statement<'_>) -> bool {
-    matches!(
-        stmt,
+    match stmt {
         Statement::ReturnStatement(_)
-            | Statement::ThrowStatement(_)
-            | Statement::BreakStatement(_)
-            | Statement::ContinueStatement(_)
-    )
+        | Statement::ThrowStatement(_)
+        | Statement::BreakStatement(_)
+        | Statement::ContinueStatement(_) => true,
+        Statement::IfStatement(if_stmt) => {
+            unconditionally_terminates_ignoring_rethrow(&if_stmt.consequent)
+                && if_stmt
+                    .alternate
+                    .as_ref()
+                    .is_some_and(|alt| unconditionally_terminates_ignoring_rethrow(alt))
+        }
+        Statement::BlockStatement(block) => {
+            block.body.iter().any(|s| unconditionally_terminates_ignoring_rethrow(s))
+        }
+        _ => false,
+    }
 }
 
 fn block_terminates(stmt: &Statement<'_>, catch_param: Option<&str>) -> bool {
