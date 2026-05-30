@@ -349,9 +349,50 @@ fn is_catch_param_rethrow(stmt: &ThrowStatement<'_>, catch_param: Option<&str>) 
     matches!(&stmt.argument, Expression::Identifier(id) if id.name.as_str() == param)
 }
 
-fn block_terminates(stmt: &Statement<'_>, catch_param: Option<&str>) -> bool {
+fn may_rethrow_catch_param(stmt: &Statement<'_>, catch_param: Option<&str>) -> bool {
+    if catch_param.is_none() {
+        return false;
+    }
     match stmt {
-        Statement::ThrowStatement(throw) => !is_catch_param_rethrow(throw, catch_param),
+        Statement::ThrowStatement(throw) => is_catch_param_rethrow(throw, catch_param),
+        Statement::BlockStatement(block) => {
+            for s in &block.body {
+                if may_rethrow_catch_param(s, catch_param) {
+                    return true;
+                }
+                if unconditionally_terminates_ignoring_rethrow(s) {
+                    break;
+                }
+            }
+            false
+        }
+        Statement::IfStatement(if_stmt) => {
+            may_rethrow_catch_param(&if_stmt.consequent, catch_param)
+                || if_stmt
+                    .alternate
+                    .as_ref()
+                    .is_some_and(|alt| may_rethrow_catch_param(alt, catch_param))
+        }
+        _ => false,
+    }
+}
+
+fn unconditionally_terminates_ignoring_rethrow(stmt: &Statement<'_>) -> bool {
+    matches!(
+        stmt,
+        Statement::ReturnStatement(_)
+            | Statement::ThrowStatement(_)
+            | Statement::BreakStatement(_)
+            | Statement::ContinueStatement(_)
+    )
+}
+
+fn block_terminates(stmt: &Statement<'_>, catch_param: Option<&str>) -> bool {
+    if may_rethrow_catch_param(stmt, catch_param) {
+        return false;
+    }
+    match stmt {
+        Statement::ThrowStatement(_) => true,
         Statement::ReturnStatement(_)
         | Statement::BreakStatement(_)
         | Statement::ContinueStatement(_) => true,
@@ -369,8 +410,11 @@ fn block_terminates(stmt: &Statement<'_>, catch_param: Option<&str>) -> bool {
 }
 
 fn unconditionally_terminates(stmt: &Statement<'_>, catch_param: Option<&str>) -> bool {
+    if may_rethrow_catch_param(stmt, catch_param) {
+        return false;
+    }
     match stmt {
-        Statement::ThrowStatement(throw) => !is_catch_param_rethrow(throw, catch_param),
+        Statement::ThrowStatement(_) => true,
         Statement::ReturnStatement(_)
         | Statement::BreakStatement(_)
         | Statement::ContinueStatement(_) => true,

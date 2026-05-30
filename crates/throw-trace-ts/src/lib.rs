@@ -250,6 +250,27 @@ try {
     }
 
     #[test]
+    fn instanceof_with_conditional_rethrow_and_return_not_in_caught_types() {
+        let source = r"
+try {
+    validate();
+} catch (e) {
+    if (e instanceof SomeError) {
+        if (cond) throw e;
+        return;
+    }
+    throw e;
+}
+";
+        let blocks = extract_try_catch_blocks(source);
+        assert_eq!(blocks.len(), 1);
+        assert!(
+            blocks[0].caught_types.is_empty(),
+            "conditional throw e is a reachable rethrow, return after it does not make it caught"
+        );
+    }
+
+    #[test]
     fn instanceof_with_rethrow_catch_param_not_in_caught_types() {
         let source = r"
 try {

@@ -211,6 +211,18 @@ fn instanceof_rethrow_catch_param_does_not_catch() {
         .stdout(predicate::str::contains("rethrowMatched"));
 }
 
+// 条件付き throw e + return → 再送出パスが到達可能なので未捕捉
+#[test]
+fn instanceof_conditional_rethrow_with_return_does_not_catch() {
+    let mut cmd = Command::cargo_bin("throw-trace").unwrap();
+    cmd.current_dir(workspace_root())
+        .args(["check", "tests/fixtures/instanceof_conditional_rethrow_with_return.ts"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("missing @throws"))
+        .stdout(predicate::str::contains("conditionalRethrow"));
+}
+
 // =============================================================
 // 同名関数の複数呼び出しと部分的 try-catch
 // =============================================================
