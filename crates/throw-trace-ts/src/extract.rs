@@ -402,8 +402,8 @@ fn block_terminates(stmt: &Statement<'_>, catch_param: Option<&str>) -> bool {
         return false;
     }
     match stmt {
-        Statement::ThrowStatement(_) => true,
-        Statement::ReturnStatement(_)
+        Statement::ThrowStatement(_)
+        | Statement::ReturnStatement(_)
         | Statement::BreakStatement(_)
         | Statement::ContinueStatement(_) => true,
         Statement::BlockStatement(block) => {
@@ -424,8 +424,8 @@ fn unconditionally_terminates(stmt: &Statement<'_>, catch_param: Option<&str>) -
         return false;
     }
     match stmt {
-        Statement::ThrowStatement(_) => true,
-        Statement::ReturnStatement(_)
+        Statement::ThrowStatement(_)
+        | Statement::ReturnStatement(_)
         | Statement::BreakStatement(_)
         | Statement::ContinueStatement(_) => true,
         Statement::IfStatement(if_stmt) => {
