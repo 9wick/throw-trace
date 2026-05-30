@@ -37,7 +37,8 @@ fn catalog_fix_is_idempotent() {
 
         if original != fixed {
             let diff = diff_strings(&original, &fixed);
-            failures.push(format!("--- {} ---\n{}", file_name.to_string_lossy(), diff));
+            let name = file_name.to_string_lossy();
+            failures.push(format!("--- {name} ---\n{diff}"));
         }
     }
 
@@ -61,10 +62,10 @@ fn diff_strings(original: &str, modified: &str) -> String {
         let m = mod_lines.get(i).copied().unwrap_or("");
         if o != m {
             if !o.is_empty() {
-                result.push_str(&format!("-{}\n", o));
+                result.push_str(&format!("-{o}\n"));
             }
             if !m.is_empty() {
-                result.push_str(&format!("+{}\n", m));
+                result.push_str(&format!("+{m}\n"));
             }
         }
     }
