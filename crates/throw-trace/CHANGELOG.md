@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.7](https://github.com/9wick/throw-trace/compare/v0.1.6...v0.1.7) - 2026-05-31
+
+### Fixed
+
+- use call site location instead of name-based matching in propagation
+- skip unreachable throw-e after if/else that both terminate
+- detect reachable catch-param rethrow in instanceof branch
+- treat catch param rethrow in instanceof branch as non-terminating
+- handle duplicate calls and partial instanceof termination
+- improve catch block handling and add member call propagation
+
+### Other
+
+- fix redundant closure and manual assert clippy warnings
+- inline format args to fix clippy warning
+- add catalog e2e tests for throw pattern coverage
+
 ## [0.1.6](https://github.com/9wick/throw-trace/compare/v0.1.5...v0.1.6) - 2026-05-25
 
 ### Added
