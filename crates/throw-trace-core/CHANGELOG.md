@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.7](https://github.com/9wick/throw-trace/compare/throw-trace-core-v0.1.6...throw-trace-core-v0.1.7) - 2026-05-31
+
+### Fixed
+
+- use call site location instead of name-based matching in propagation
+- handle duplicate calls and partial instanceof termination
+- improve catch block handling and add member call propagation
+
+### Other
+
+- apply cargo fmt
+- allow similar_names for caller/callee in test
+- apply cargo fmt
+
 ## [0.1.6](https://github.com/9wick/throw-trace/compare/throw-trace-core-v0.1.5...throw-trace-core-v0.1.6) - 2026-05-25
 
 ### Added
