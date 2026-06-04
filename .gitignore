@@ -1,4 +1,5 @@
 /target
+.throw-trace/
 Cargo.lock
 *.swp
 *.swo

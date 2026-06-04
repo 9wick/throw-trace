@@ -6,7 +6,9 @@ mod propagation;
 mod types;
 
 pub use call_graph::CallGraph;
-pub use diagnostic::{generate_diagnostics_with_resolver, generate_lsp_violations};
+pub use diagnostic::{
+    find_missing_declarations, generate_diagnostics_with_resolver, generate_lsp_violations,
+};
 pub use propagation::compute_propagated_throws;
 pub use types::{
     CallSite, DeclaredThrow, Diagnostic, ErrorType, FunctionId, FunctionSignature, LspViolation,

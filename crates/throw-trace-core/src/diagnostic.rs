@@ -23,7 +23,7 @@ pub fn generate_diagnostics_with_resolver<S: std::hash::BuildHasher, R: TypeReso
     diagnostics
 }
 
-fn find_missing_declarations<R: TypeResolver>(
+pub fn find_missing_declarations<R: TypeResolver>(
     sig: &FunctionSignature,
     propagated: &[PropagatedThrow],
     resolver: &mut R,
