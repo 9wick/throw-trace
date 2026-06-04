@@ -1,4 +1,5 @@
 mod analyzer;
+mod cache;
 mod fixer;
 mod loader;
 mod reporter;

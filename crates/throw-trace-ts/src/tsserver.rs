@@ -289,7 +289,7 @@ impl Drop for TsServer {
 pub struct TsServerTypeResolver {
     server: TsServer,
     opened_files: std::collections::HashSet<std::path::PathBuf>,
-    check_cache: std::collections::HashMap<(String, String), bool>,
+    check_cache: std::collections::HashMap<(std::path::PathBuf, String, String), bool>,
 }
 
 impl TsServerTypeResolver {
@@ -348,7 +348,8 @@ impl throw_trace_core::TypeResolver for TsServerTypeResolver {
             return true;
         }
 
-        let cache_key = (thrown_type.to_string(), declared_type.to_string());
+        let canonical_file = file_path.canonicalize().unwrap_or_else(|_| file_path.to_path_buf());
+        let cache_key = (canonical_file, thrown_type.to_string(), declared_type.to_string());
         if let Some(&result) = self.check_cache.get(&cache_key) {
             return result;
         }
