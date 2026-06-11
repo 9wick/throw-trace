@@ -108,7 +108,9 @@ fn is_caught(throw_site: &ThrowSite, sig: &FunctionSignature) -> bool {
 
         let has_rethrow = catch_has_rethrow(block, sig);
 
-        if block.caught_types.is_empty() && !has_rethrow {
+        // rethrow がない catch は caught_types（instanceof 分岐）の内容に関係なく
+        // すべての例外を握りつぶす。型の照合が意味を持つのは rethrow がある場合のみ
+        if !has_rethrow {
             return true;
         }
 

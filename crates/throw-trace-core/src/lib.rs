@@ -374,6 +374,43 @@ mod tests {
     }
 
     #[test]
+    fn rethrow_less_catch_suppresses_unmatched_types() {
+        // catch (e) { if (e instanceof SomeError) return; } のように
+        // rethrow がない catch は、instanceof に一致しない型もすべて握りつぶす
+        let mut signatures: HashMap<FunctionId, FunctionSignature> = HashMap::new();
+        let graph = CallGraph::new();
+
+        let func = FunctionId::new(PathBuf::from("a.ts"), "foo", Span { start: 0, end: 200 });
+
+        signatures.insert(
+            func.clone(),
+            FunctionSignature {
+                id: func.clone(),
+                name_span: Span { start: 9, end: 12 },
+                declared_throws: vec![],
+                direct_throws: vec![ThrowSite {
+                    location: Span { start: 20, end: 50 },
+                    error_type: ErrorType::Named("OtherError".into()),
+                }],
+                calls: vec![],
+                try_catch_blocks: vec![TryCatchBlock {
+                    try_span: Span { start: 10, end: 100 },
+                    catch_span: Some(Span { start: 100, end: 150 }),
+                    caught_types: vec!["SomeError".into()],
+                }],
+                is_async: false,
+                class_name: None,
+            },
+        );
+
+        let propagated = compute_propagated_throws(&func, &signatures, &graph);
+        assert!(
+            propagated.is_empty(),
+            "catch without rethrow must swallow all exception types, got: {propagated:?}"
+        );
+    }
+
+    #[test]
     fn new_throw_in_catch_propagates() {
         let mut signatures: HashMap<FunctionId, FunctionSignature> = HashMap::new();
         let graph = CallGraph::new();
