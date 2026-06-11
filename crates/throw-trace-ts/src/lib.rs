@@ -65,6 +65,64 @@ mod tests {
     }
 
     #[test]
+    fn extract_functions_finds_function_expression() {
+        let source = "const throwsInExpr = function() { throw new E1(); };";
+        let file_path = PathBuf::from("test.ts");
+        let sigs = extract_functions(source, &file_path).unwrap();
+        assert_eq!(sigs.len(), 1, "function expression must produce a signature");
+        assert_eq!(sigs[0].id.name.as_str(), "throwsInExpr");
+        assert_eq!(sigs[0].direct_throws.len(), 1);
+    }
+
+    #[test]
+    fn extract_functions_finds_exported_function_expression() {
+        let source = "export const throwsInExpr = function() { throw new E1(); };";
+        let file_path = PathBuf::from("test.ts");
+        let sigs = extract_functions(source, &file_path).unwrap();
+        assert_eq!(sigs.len(), 1, "exported function expression must produce a signature");
+        assert_eq!(sigs[0].id.name.as_str(), "throwsInExpr");
+        assert_eq!(sigs[0].direct_throws.len(), 1);
+    }
+
+    #[test]
+    fn extract_functions_finds_class_property_arrow() {
+        let source = r"
+class Handler {
+    onClick = () => {
+        throw new PropError();
+    };
+}
+";
+        let file_path = PathBuf::from("test.ts");
+        let sigs = extract_functions(source, &file_path).unwrap();
+        let on_click = sigs
+            .iter()
+            .find(|s| s.id.name.as_str() == "onClick")
+            .expect("class property arrow must produce a signature");
+        assert_eq!(on_click.direct_throws.len(), 1);
+        assert_eq!(on_click.class_name.as_deref(), Some("Handler"));
+    }
+
+    #[test]
+    fn class_property_arrow_throw_not_attributed_to_sibling_method() {
+        let source = r"
+class Handler {
+    onClick = () => {
+        throw new PropError();
+    };
+
+    safe() {
+        return 1;
+    }
+}
+";
+        let file_path = PathBuf::from("test.ts");
+        let sigs = extract_functions(source, &file_path).unwrap();
+        let safe = sigs.iter().find(|s| s.id.name.as_str() == "safe").unwrap();
+        assert!(safe.direct_throws.is_empty());
+    }
+
+    #[test]
     fn extract_functions_finds_async_function() {
         let source = "async function fetchData() { }";
         let file_path = PathBuf::from("test.ts");
@@ -207,6 +265,73 @@ try {
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].caught_types.len(), 1);
         assert_eq!(blocks[0].caught_types[0].as_str(), "ValidationError");
+    }
+
+    #[test]
+    fn instanceof_else_if_chain_in_caught_types() {
+        let source = r"
+try {
+    validate();
+} catch (e) {
+    if (e instanceof ErrorA) {
+        return null;
+    } else if (e instanceof ErrorB) {
+        return null;
+    }
+    throw e;
+}
+";
+        let blocks = extract_try_catch_blocks(source);
+        assert_eq!(blocks.len(), 1);
+        let caught: Vec<&str> =
+            blocks[0].caught_types.iter().map(compact_str::CompactString::as_str).collect();
+        assert_eq!(caught, vec!["ErrorA", "ErrorB"], "else-if chain instanceof must be caught");
+    }
+
+    #[test]
+    fn instanceof_else_if_without_termination_not_in_caught_types() {
+        let source = r"
+try {
+    validate();
+} catch (e) {
+    if (e instanceof ErrorA) {
+        return null;
+    } else if (e instanceof ErrorB) {
+        console.log(e);
+    }
+    throw e;
+}
+";
+        let blocks = extract_try_catch_blocks(source);
+        assert_eq!(blocks.len(), 1);
+        let caught: Vec<&str> =
+            blocks[0].caught_types.iter().map(compact_str::CompactString::as_str).collect();
+        assert_eq!(caught, vec!["ErrorA"], "non-terminating else-if branch must not be caught");
+    }
+
+    #[test]
+    fn instanceof_else_if_behind_non_instanceof_test_not_in_caught_types() {
+        // 先頭の条件が catch param の instanceof でない場合、else-if への到達は
+        // 例外型と無関係な条件に依存するため捕捉済みとはみなせない
+        let source = r"
+try {
+    validate();
+} catch (e) {
+    if (cond) {
+        console.log(e);
+    } else if (e instanceof ErrorB) {
+        return null;
+    }
+    throw e;
+}
+";
+        let blocks = extract_try_catch_blocks(source);
+        assert_eq!(blocks.len(), 1);
+        assert!(
+            blocks[0].caught_types.is_empty(),
+            "else-if behind unrelated condition must not be caught, got: {:?}",
+            blocks[0].caught_types
+        );
     }
 
     #[test]
