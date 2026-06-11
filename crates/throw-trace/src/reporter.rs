@@ -91,12 +91,10 @@ fn report_text(
         }
 
         writeln!(stdout, "   |")?;
-        let types: Vec<_> =
-            diag.missing_throws.iter().filter_map(|m| m.error_type.type_name()).collect();
         writeln!(
             stdout,
             "   = help: add @throws {{{}}} to function {}",
-            types.join(", "),
+            help_types(&diag.missing_throws),
             diag.function.name
         )?;
         writeln!(stdout)?;
@@ -146,6 +144,15 @@ fn report_text(
     )?;
 
     Ok(())
+}
+
+// 型解決できなかった throw は `unknown` として提示する。空の型リスト
+// `@throws {}` は構文として成立せず、利用者が修正手段に辿り着けないため
+fn help_types(missing: &[throw_trace_core::PropagatedThrow]) -> String {
+    let mut types: Vec<&str> =
+        missing.iter().map(|m| m.error_type.type_name().unwrap_or("unknown")).collect();
+    types.dedup();
+    types.join(", ")
 }
 
 fn report_json(
@@ -204,4 +211,38 @@ fn report_json(
     println!("{json}");
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use throw_trace_core::{ErrorType, FunctionId, PropagatedThrow, Span, ThrowSite};
+
+    fn propagated(error_type: ErrorType) -> PropagatedThrow {
+        let span = Span { start: 0, end: 10 };
+        PropagatedThrow {
+            error_type: error_type.clone(),
+            origin: ThrowSite { location: span, error_type },
+            origin_function: FunctionId::new(PathBuf::from("a.ts"), "origin", span),
+            path: vec![],
+        }
+    }
+
+    // Unknown のままの throw も help が実行可能な宣言（@throws {unknown}）を提示すること。
+    // 空の型リスト `@throws {}` は構文として成立せず、利用者が修正手段に辿り着けない
+    #[test]
+    fn help_types_renders_unknown_as_declarable_type() {
+        let missing = vec![propagated(ErrorType::Unknown)];
+        assert_eq!(help_types(&missing), "unknown");
+    }
+
+    #[test]
+    fn help_types_joins_named_types() {
+        let missing = vec![
+            propagated(ErrorType::Named("AppError".into())),
+            propagated(ErrorType::Unknown),
+        ];
+        assert_eq!(help_types(&missing), "AppError, unknown");
+    }
 }
