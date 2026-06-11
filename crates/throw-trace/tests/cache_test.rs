@@ -179,3 +179,58 @@ function raises() {
     let fixed = fs::read_to_string(&source).unwrap();
     assert!(fixed.contains("@throws {Error}"));
 }
+
+// 無関係なファイルの変更で diagnostics キャッシュ全体が無効化されないこと。
+// fingerprint がワークスペース全体のソースハッシュに依存していると、
+// 1ファイルの変更で全関数のキャッシュが miss する
+#[test]
+fn unrelated_file_change_keeps_diagnostic_cache_entries() {
+    let temp = tempfile::tempdir().unwrap();
+    let target = temp.path().join("a.ts");
+    let unrelated = temp.path().join("b.ts");
+    fs::write(
+        &target,
+        r#"
+function raises() {
+  throw new Error("x");
+}
+"#,
+    )
+    .unwrap();
+    fs::write(&unrelated, "export const x = 1;\n").unwrap();
+
+    Command::cargo_bin("throw-trace")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["check", "."])
+        .assert()
+        .code(1);
+
+    let cache_path = temp.path().join(".throw-trace/cache.json");
+    let first: Value = serde_json::from_str(&fs::read_to_string(&cache_path).unwrap()).unwrap();
+    let first_diags = first["diagnostics"].as_object().unwrap().clone();
+    assert!(!first_diags.is_empty(), "diagnostics cache should be populated");
+
+    // 無関係ファイルだけを変更する（関数は含まれないので diagnostics エントリは増えない）
+    fs::write(&unrelated, "export const x = 1;\nexport const y = 2;\n").unwrap();
+
+    Command::cargo_bin("throw-trace")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["check", "."])
+        .assert()
+        .code(1);
+
+    let second: Value = serde_json::from_str(&fs::read_to_string(&cache_path).unwrap()).unwrap();
+    let second_diags = second["diagnostics"].as_object().unwrap();
+
+    for (key, entry) in &first_diags {
+        let second_entry = second_diags
+            .get(key)
+            .unwrap_or_else(|| panic!("diagnostic entry {key} should survive unrelated change"));
+        assert_eq!(
+            second_entry["dependency_fingerprint"], entry["dependency_fingerprint"],
+            "dependency fingerprint must not change when an unrelated file changes"
+        );
+    }
+}

@@ -31,11 +31,17 @@ enum Modification {
 }
 
 fn apply_fixes(file_path: &PathBuf, diagnostics: &[&Diagnostic]) -> Result<bool> {
-    let source = fs::read_to_string(file_path)?;
-    let newline_size = detect_newline_size(&source);
+    let raw = fs::read_to_string(file_path)?;
+    // BOM は span のオフセットに含まれるため、剥がした分を行検索時に補正する
+    let bom = if raw.starts_with('\u{FEFF}') { "\u{FEFF}" } else { "" };
+    let source = &raw[bom.len()..];
+    let newline = if source.contains("\r\n") { "\r\n" } else { "\n" };
+    let had_trailing_newline = source.ends_with('\n');
     let lines: Vec<&str> = source.lines().collect();
 
-    let mut modifications = collect_modifications(&source, &lines, newline_size, diagnostics);
+    #[allow(clippy::cast_possible_truncation)]
+    let bom_len = bom.len() as u32;
+    let mut modifications = collect_modifications(source, &lines, bom_len, diagnostics);
     if modifications.is_empty() {
         return Ok(false);
     }
@@ -79,34 +85,32 @@ fn apply_fixes(file_path: &PathBuf, diagnostics: &[&Diagnostic]) -> Result<bool>
                 }
                 new_lines.push(format!("{indent} */"));
 
-                result_lines[jsdoc_end_line] = new_lines.join("\n");
+                result_lines.splice(jsdoc_end_line..=jsdoc_end_line, new_lines);
             }
         }
     }
 
-    let output = result_lines.join("\n") + "\n";
+    let mut output = String::with_capacity(raw.len());
+    output.push_str(bom);
+    output.push_str(&result_lines.join(newline));
+    if had_trailing_newline {
+        output.push_str(newline);
+    }
     fs::write(file_path, output)?;
     Ok(true)
-}
-
-fn detect_newline_size(source: &str) -> u32 {
-    if source.contains("\r\n") {
-        2
-    } else {
-        1
-    }
 }
 
 fn collect_modifications(
     source: &str,
     lines: &[&str],
-    newline_size: u32,
+    bom_len: u32,
     diagnostics: &[&Diagnostic],
 ) -> Vec<Modification> {
     let mut modifications = Vec::new();
 
     for diag in diagnostics {
-        let func_line = find_function_line(source, lines, newline_size, diag.function.span.start);
+        let func_line =
+            find_function_line(source, diag.function.span.start.saturating_sub(bom_len));
         let Some(func_line) = func_line else {
             continue;
         };
@@ -132,29 +136,13 @@ fn collect_modifications(
     modifications
 }
 
-#[allow(clippy::cast_possible_truncation)]
-fn find_function_line(
-    source: &str,
-    lines: &[&str],
-    newline_size: u32,
-    byte_offset: u32,
-) -> Option<usize> {
-    let mut current_byte = 0u32;
-    for (i, line) in lines.iter().enumerate() {
-        let line_len = line.len() as u32;
-        let is_last_line = i == lines.len() - 1;
-        let line_end = if is_last_line && !source.ends_with('\n') {
-            current_byte + line_len
-        } else {
-            current_byte + line_len + newline_size
-        };
-
-        if byte_offset >= current_byte && byte_offset < line_end {
-            return Some(i);
-        }
-        current_byte = line_end;
+// オフセットより前にある改行を直接数えることで、CRLF/LF 混在でもずれない
+fn find_function_line(source: &str, byte_offset: u32) -> Option<usize> {
+    let offset = byte_offset as usize;
+    if offset > source.len() {
+        return None;
     }
-    None
+    Some(source[..offset].matches('\n').count())
 }
 
 fn find_jsdoc_end_line(lines: &[&str], func_line: usize) -> Option<usize> {

@@ -325,11 +325,21 @@ pub(crate) fn extract_instanceof_types(
     block: &oxc_ast::ast::BlockStatement,
     catch_param: Option<&str>,
 ) -> Vec<CompactString> {
+    // パラメータなしの catch では捕捉した例外を参照できないため型チェックは成立しない
+    let Some(param) = catch_param else {
+        return Vec::new();
+    };
+
     let mut types = Vec::new();
     for stmt in &block.body {
         if let Statement::IfStatement(if_stmt) = stmt {
             if let Expression::BinaryExpression(bin) = &if_stmt.test {
                 if bin.operator == oxc_ast::ast::BinaryOperator::Instanceof {
+                    // 左辺が catch パラメータ以外なら、捕捉した例外の型チェックではない
+                    let left_is_catch_param = matches!(&bin.left, Expression::Identifier(id) if id.name.as_str() == param);
+                    if !left_is_catch_param {
+                        continue;
+                    }
                     if let Expression::Identifier(id) = &bin.right {
                         if block_terminates(&if_stmt.consequent, catch_param) {
                             types.push(id.name.as_str().into());
@@ -373,6 +383,11 @@ fn may_rethrow_catch_param(stmt: &Statement<'_>, catch_param: Option<&str>) -> b
                     .as_ref()
                     .is_some_and(|alt| may_rethrow_catch_param(alt, catch_param))
         }
+        Statement::SwitchStatement(switch) => switch
+            .cases
+            .iter()
+            .flat_map(|case| &case.consequent)
+            .any(|s| may_rethrow_catch_param(s, catch_param)),
         _ => false,
     }
 }
@@ -415,6 +430,7 @@ fn block_terminates(stmt: &Statement<'_>, catch_param: Option<&str>) -> bool {
                 if_stmt.alternate.as_ref().is_some_and(|alt| block_terminates(alt, catch_param));
             then_terminates && else_terminates
         }
+        Statement::SwitchStatement(switch) => switch_terminates(switch, catch_param),
         _ => false,
     }
 }
@@ -434,6 +450,59 @@ fn unconditionally_terminates(stmt: &Statement<'_>, catch_param: Option<&str>) -
                 if_stmt.alternate.as_ref().is_some_and(|alt| block_terminates(alt, catch_param));
             then_terminates && else_terminates
         }
+        Statement::SwitchStatement(switch) => switch_terminates(switch, catch_param),
+        _ => false,
+    }
+}
+
+// switch が制御を後続へ流さない（全経路が throw/return 等で終端する）か判定する。
+// break は switch を抜けて後続へ進むため終端として扱わない
+fn switch_terminates(
+    switch: &oxc_ast::ast::SwitchStatement<'_>,
+    catch_param: Option<&str>,
+) -> bool {
+    // default がなければマッチしない値で素通りし得る
+    if !switch.cases.iter().any(|case| case.test.is_none()) {
+        return false;
+    }
+
+    let last_index = switch.cases.len() - 1;
+    for (i, case) in switch.cases.iter().enumerate() {
+        if case.consequent.is_empty() {
+            // 空ケースは次のケースへフォールスルーする。最後なら switch を抜ける
+            if i == last_index {
+                return false;
+            }
+            continue;
+        }
+        if !case.consequent.iter().any(|s| case_stmt_terminates(s, catch_param)) {
+            return false;
+        }
+    }
+    true
+}
+
+// switch ケース内の終端判定。block_terminates と異なり break を終端に数えない
+fn case_stmt_terminates(stmt: &Statement<'_>, catch_param: Option<&str>) -> bool {
+    if may_rethrow_catch_param(stmt, catch_param) {
+        return false;
+    }
+    match stmt {
+        Statement::ThrowStatement(_)
+        | Statement::ReturnStatement(_)
+        | Statement::ContinueStatement(_) => true,
+        Statement::BlockStatement(block) => {
+            block.body.iter().any(|s| case_stmt_terminates(s, catch_param))
+        }
+        Statement::IfStatement(if_stmt) => {
+            let then_terminates = case_stmt_terminates(&if_stmt.consequent, catch_param);
+            let else_terminates = if_stmt
+                .alternate
+                .as_ref()
+                .is_some_and(|alt| case_stmt_terminates(alt, catch_param));
+            then_terminates && else_terminates
+        }
+        Statement::SwitchStatement(switch) => switch_terminates(switch, catch_param),
         _ => false,
     }
 }

@@ -79,7 +79,20 @@ pub struct CachedDefinition {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CachedDiagnostic {
     pub dependency_fingerprint: String,
+    // この診断を計算した際に参照した型チェックとその対象ファイル。
+    // 対象ファイルが変わると型チェック結果も変わり得るため、lookup 時に検証する
+    #[serde(default)]
+    pub type_check_dependencies: Vec<TypeCheckDependency>,
     pub diagnostic: Option<Diagnostic>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TypeCheckDependency {
+    pub file: PathBuf,
+    pub file_hash: String,
+    pub thrown: String,
+    pub declared: String,
+    pub result: bool,
 }
 
 // Skeleton APIs are wired into Analyzer in later persistent-cache tasks.
@@ -214,26 +227,31 @@ impl CacheStore {
     ) -> Option<Option<Diagnostic>> {
         let key = function_cache_key(function_id);
         let entry = self.data.diagnostics.get(&key)?;
-        if entry.dependency_fingerprint == dependency_fingerprint {
-            Some(entry.diagnostic.clone())
-        } else {
-            None
+        if entry.dependency_fingerprint != dependency_fingerprint {
+            return None;
         }
+        for dep in &entry.type_check_dependencies {
+            let source = fs::read_to_string(&dep.file).ok()?;
+            if Self::content_hash(&source) != dep.file_hash {
+                return None;
+            }
+        }
+        Some(entry.diagnostic.clone())
     }
 
     pub fn update_diagnostic(
         &mut self,
         function_id: &FunctionId,
         dependency_fingerprint: String,
+        type_check_dependencies: Vec<TypeCheckDependency>,
         diagnostic: Option<Diagnostic>,
     ) {
         let key = function_cache_key(function_id);
-        self.data.diagnostics.insert(key, CachedDiagnostic { dependency_fingerprint, diagnostic });
+        self.data.diagnostics.insert(
+            key,
+            CachedDiagnostic { dependency_fingerprint, type_check_dependencies, diagnostic },
+        );
         self.dirty = true;
-    }
-
-    pub fn type_checks_fingerprint(&self) -> String {
-        Self::stable_json_hash(&self.data.type_checks)
     }
 
     pub fn type_check_key(
@@ -434,15 +452,21 @@ pub struct CachedTypeResolver<'a, R> {
     cache: &'a mut CacheStore,
     inner: R,
     scope_fingerprint: String,
+    // 直近の take_recorded 以降に参照した型チェック（診断の依存として保存する）
+    recorded: Vec<TypeCheckDependency>,
 }
 
 impl<'a, R> CachedTypeResolver<'a, R> {
     pub fn new(cache: &'a mut CacheStore, inner: R, scope_fingerprint: String) -> Self {
-        Self { cache, inner, scope_fingerprint }
+        Self { cache, inner, scope_fingerprint, recorded: Vec::new() }
     }
 
     pub fn cache_mut(&mut self) -> &mut CacheStore {
         self.cache
+    }
+
+    pub fn take_recorded(&mut self) -> Vec<TypeCheckDependency> {
+        std::mem::take(&mut self.recorded)
     }
 }
 
@@ -458,25 +482,34 @@ impl<R: TypeResolver> TypeResolver for CachedTypeResolver<'_, R> {
         };
         let file_hash = CacheStore::content_hash(&source);
 
-        if let Some(result) = self.cache.lookup_type_check(
+        let result = if let Some(result) = self.cache.lookup_type_check(
             file_path,
             &file_hash,
             &self.scope_fingerprint,
             thrown_type,
             declared_type,
         ) {
-            return result;
-        }
+            result
+        } else {
+            let result = self.inner.is_assignable_to(file_path, thrown_type, declared_type);
+            self.cache.update_type_check(
+                file_path,
+                &file_hash,
+                &self.scope_fingerprint,
+                thrown_type,
+                declared_type,
+                result,
+            );
+            result
+        };
 
-        let result = self.inner.is_assignable_to(file_path, thrown_type, declared_type);
-        self.cache.update_type_check(
-            file_path,
-            &file_hash,
-            &self.scope_fingerprint,
-            thrown_type,
-            declared_type,
+        self.recorded.push(TypeCheckDependency {
+            file: file_path.to_path_buf(),
+            file_hash,
+            thrown: thrown_type.to_string(),
+            declared: declared_type.to_string(),
             result,
-        );
+        });
         result
     }
 
@@ -495,67 +528,6 @@ pub fn hash_bytes(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
     hex::encode(hasher.finalize())
-}
-
-pub fn workspace_source_fingerprint(workspace_root: &Path) -> String {
-    let workspace_root = canonical_or_self(workspace_root);
-    let mut entries = BTreeMap::new();
-    collect_workspace_source_fingerprint_entries(&workspace_root, &workspace_root, &mut entries);
-    CacheStore::stable_json_hash(&entries)
-}
-
-fn collect_workspace_source_fingerprint_entries(
-    workspace_root: &Path,
-    dir: &Path,
-    entries: &mut BTreeMap<String, String>,
-) {
-    let Ok(read_dir) = fs::read_dir(dir) else {
-        let key = format!("{}::<read_dir>", resolution_fingerprint_path_key(workspace_root, dir));
-        entries.insert(key, "<unreadable>".to_string());
-        return;
-    };
-
-    for entry in read_dir {
-        let Ok(entry) = entry else {
-            let key = format!("{}::<entry>", resolution_fingerprint_path_key(workspace_root, dir));
-            entries.insert(key, "<unreadable>".to_string());
-            continue;
-        };
-
-        let path = entry.path();
-        let file_name = entry.file_name();
-        let Some(file_name) = file_name.to_str() else {
-            let key =
-                format!("{}::<file_name>", resolution_fingerprint_path_key(workspace_root, &path));
-            entries.insert(key, "<non-utf8>".to_string());
-            continue;
-        };
-
-        let Ok(file_type) = entry.file_type() else {
-            let key =
-                format!("{}::<file_type>", resolution_fingerprint_path_key(workspace_root, &path));
-            entries.insert(key, "<unreadable>".to_string());
-            continue;
-        };
-
-        if file_type.is_dir() {
-            if is_excluded_resolution_dir(file_name) {
-                continue;
-            }
-            collect_workspace_source_fingerprint_entries(workspace_root, &path, entries);
-        } else if file_type.is_file() && is_typescript_source_file(&path) {
-            let key = resolution_fingerprint_path_key(workspace_root, &path);
-            let content_hash = fs::read(&path)
-                .map_or_else(|_| "<unreadable>".to_string(), |bytes| hash_bytes(&bytes));
-            entries.insert(key, content_hash);
-        }
-    }
-}
-
-fn is_typescript_source_file(path: &Path) -> bool {
-    path.extension().and_then(|extension| extension.to_str()).is_some_and(|extension| {
-        matches!(extension.to_ascii_lowercase().as_str(), "ts" | "tsx" | "mts" | "cts")
-    })
 }
 
 #[allow(dead_code)]
@@ -1086,54 +1058,6 @@ mod tests {
             CacheStore::type_check_key(path, "hash", "first-scope", "ChildError", "BaseError");
         let second =
             CacheStore::type_check_key(path, "hash", "second-scope", "ChildError", "BaseError");
-        assert_ne!(first, second);
-    }
-
-    #[test]
-    fn type_checks_fingerprint_changes_when_entry_or_result_changes() {
-        let temp_dir = tempfile::tempdir().expect("tempdir should be created");
-        let file_path = temp_dir.path().join("example.ts");
-        let mut store = CacheStore::load(temp_dir.path(), "workspace".to_string());
-
-        let empty = store.type_checks_fingerprint();
-        store.update_type_check(
-            &file_path,
-            "file-hash",
-            "scope",
-            "ThrownError",
-            "DeclaredError",
-            true,
-        );
-        let with_entry = store.type_checks_fingerprint();
-        store.update_type_check(
-            &file_path,
-            "file-hash",
-            "scope",
-            "ThrownError",
-            "DeclaredError",
-            false,
-        );
-        let changed_result = store.type_checks_fingerprint();
-
-        assert_ne!(empty, with_entry);
-        assert_ne!(with_entry, changed_result);
-    }
-
-    #[test]
-    fn workspace_source_fingerprint_changes_when_imported_ts_file_changes() {
-        let temp_dir = tempfile::tempdir().expect("tempdir should be created");
-        let src_dir = temp_dir.path().join("src");
-        fs::create_dir_all(&src_dir).expect("src dir should be created");
-        fs::write(src_dir.join("caller.ts"), "import { DerivedError } from './errors';\n")
-            .expect("caller should be written");
-        fs::write(src_dir.join("errors.ts"), "export class DerivedError extends BaseError {}\n")
-            .expect("errors should be written");
-
-        let first = workspace_source_fingerprint(temp_dir.path());
-        fs::write(src_dir.join("errors.ts"), "export class DerivedError extends Error {}\n")
-            .expect("errors should be updated");
-        let second = workspace_source_fingerprint(temp_dir.path());
-
         assert_ne!(first, second);
     }
 
@@ -1769,6 +1693,7 @@ mod tests {
             "diagnostic".to_string(),
             CachedDiagnostic {
                 dependency_fingerprint: "old-dependency".to_string(),
+                type_check_dependencies: Vec::new(),
                 diagnostic: None,
             },
         );
@@ -1805,6 +1730,7 @@ mod tests {
             "diagnostic".to_string(),
             CachedDiagnostic {
                 dependency_fingerprint: "old-dependency".to_string(),
+                type_check_dependencies: Vec::new(),
                 diagnostic: None,
             },
         );
@@ -1886,5 +1812,77 @@ mod tests {
         assert_eq!(cache.workspace_fingerprint, "workspace");
         assert_eq!(cache.type_checks.get("check"), Some(&true));
         assert!(!store.dirty);
+    }
+
+    fn sample_function_id() -> FunctionId {
+        FunctionId::new(PathBuf::from("/tmp/a.ts"), "f", Span { start: 0, end: 10 })
+    }
+
+    // 診断が依存した型チェックの対象ファイルが変わったら、
+    // fingerprint が一致していてもキャッシュを miss させる
+    #[test]
+    fn diagnostic_lookup_misses_when_type_check_dependency_file_changes() {
+        let temp_dir = tempfile::tempdir().expect("tempdir should be created");
+        let dep_file = temp_dir.path().join("errors.ts");
+        fs::write(&dep_file, "export class A extends Error {}\n").expect("dep should be written");
+
+        let mut store = CacheStore::load(temp_dir.path(), "workspace".to_string());
+        let func_id = sample_function_id();
+        let dep = TypeCheckDependency {
+            file: dep_file.clone(),
+            file_hash: CacheStore::content_hash("export class A extends Error {}\n"),
+            thrown: "A".to_string(),
+            declared: "Error".to_string(),
+            result: true,
+        };
+        store.update_diagnostic(&func_id, "fp".to_string(), vec![dep], None);
+
+        assert_eq!(store.lookup_diagnostic(&func_id, "fp"), Some(None));
+
+        fs::write(&dep_file, "export class A {}\n").expect("dep should be updated");
+        assert_eq!(
+            store.lookup_diagnostic(&func_id, "fp"),
+            None,
+            "changed dependency file must invalidate the diagnostic entry"
+        );
+    }
+
+    struct StubResolver(bool);
+
+    impl TypeResolver for StubResolver {
+        fn is_assignable_to(&mut self, _: &Path, _: &str, _: &str) -> bool {
+            self.0
+        }
+
+        fn resolve_type(&mut self, _: &Path, _: Span) -> Option<String> {
+            None
+        }
+    }
+
+    // CachedTypeResolver は参照した型チェックを依存として記録する
+    // （キャッシュヒット時も記録されること）
+    #[test]
+    fn cached_type_resolver_records_type_check_dependencies() {
+        let temp_dir = tempfile::tempdir().expect("tempdir should be created");
+        let file = temp_dir.path().join("a.ts");
+        let content = "export class Thrown extends Declared {}\n";
+        fs::write(&file, content).expect("file should be written");
+
+        let mut store = CacheStore::load(temp_dir.path(), "workspace".to_string());
+        let mut resolver =
+            CachedTypeResolver::new(&mut store, StubResolver(true), "scope".to_string());
+
+        assert!(resolver.is_assignable_to(&file, "Thrown", "Declared"));
+        let recorded = resolver.take_recorded();
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(recorded[0].file_hash, CacheStore::content_hash(content));
+        assert_eq!(recorded[0].thrown, "Thrown");
+        assert_eq!(recorded[0].declared, "Declared");
+        assert!(recorded[0].result);
+        assert!(resolver.take_recorded().is_empty(), "take_recorded should drain");
+
+        // 2回目はキャッシュヒット経路だが、依存としては同様に記録される
+        assert!(resolver.is_assignable_to(&file, "Thrown", "Declared"));
+        assert_eq!(resolver.take_recorded().len(), 1);
     }
 }

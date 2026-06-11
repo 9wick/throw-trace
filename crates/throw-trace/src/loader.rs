@@ -37,6 +37,9 @@ impl FileLoader {
                         files.push(entry_path.to_path_buf());
                     }
                 }
+            } else {
+                // 黙ってスキップすると CI がサイレント成功するためエラーにする
+                anyhow::bail!("path does not exist: {path_str}");
             }
         }
 

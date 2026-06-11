@@ -811,6 +811,112 @@ mod tests {
         );
     }
 
+    // 2つの呼び出しパスが同じ推移的 callee を共有するケース。
+    // caller → a → f (a() は try-catch 内 → 捕捉される)
+    // caller → b → f (b() は try-catch 外 → 伝播するはず)
+    // visited の書き戻し方式だと、先に処理されたパスで f が訪問済みになり、
+    // 後続パスの throw が収集されず false negative になる
+    #[test]
+    #[allow(clippy::similar_names, clippy::too_many_lines)]
+    fn shared_transitive_callee_propagates_via_uncaught_path() {
+        let mut signatures: HashMap<FunctionId, FunctionSignature> = HashMap::new();
+        let mut graph = CallGraph::new();
+
+        let f = FunctionId::new(PathBuf::from("f.ts"), "f", Span { start: 0, end: 50 });
+        let a = FunctionId::new(PathBuf::from("a.ts"), "a", Span { start: 0, end: 100 });
+        let b = FunctionId::new(PathBuf::from("b.ts"), "b", Span { start: 0, end: 100 });
+        let caller =
+            FunctionId::new(PathBuf::from("main.ts"), "caller", Span { start: 0, end: 400 });
+
+        signatures.insert(
+            f.clone(),
+            FunctionSignature {
+                id: f.clone(),
+                name_span: Span { start: 9, end: 10 },
+                declared_throws: vec![],
+                direct_throws: vec![ThrowSite {
+                    location: Span { start: 20, end: 40 },
+                    error_type: ErrorType::Named("SharedError".into()),
+                }],
+                calls: vec![],
+                try_catch_blocks: vec![],
+                is_async: false,
+                class_name: None,
+            },
+        );
+
+        for (id, call_loc) in [(&a, 50), (&b, 50)] {
+            signatures.insert(
+                (*id).clone(),
+                FunctionSignature {
+                    id: (*id).clone(),
+                    name_span: Span { start: 9, end: 10 },
+                    declared_throws: vec![],
+                    direct_throws: vec![],
+                    calls: vec![CallSite {
+                        callee_name: "f".into(),
+                        callee_span: Span { start: call_loc, end: call_loc + 1 },
+                        location: Span { start: call_loc, end: call_loc + 10 },
+                    }],
+                    try_catch_blocks: vec![],
+                    is_async: false,
+                    class_name: None,
+                },
+            );
+        }
+
+        // caller: a() は try-catch 内 (130-200)、b() は外 (300)
+        signatures.insert(
+            caller.clone(),
+            FunctionSignature {
+                id: caller.clone(),
+                name_span: Span { start: 9, end: 15 },
+                declared_throws: vec![],
+                direct_throws: vec![],
+                calls: vec![
+                    CallSite {
+                        callee_name: "a".into(),
+                        callee_span: Span { start: 150, end: 151 },
+                        location: Span { start: 150, end: 160 },
+                    },
+                    CallSite {
+                        callee_name: "b".into(),
+                        callee_span: Span { start: 300, end: 301 },
+                        location: Span { start: 300, end: 310 },
+                    },
+                ],
+                try_catch_blocks: vec![TryCatchBlock {
+                    try_span: Span { start: 130, end: 200 },
+                    catch_span: Some(Span { start: 200, end: 250 }),
+                    caught_types: vec![],
+                }],
+                is_async: false,
+                class_name: None,
+            },
+        );
+
+        graph.add_function(f.clone());
+        graph.add_function(a.clone());
+        graph.add_function(b.clone());
+        graph.add_function(caller.clone());
+        graph.add_call_with_location(&a, &f, Span { start: 50, end: 60 });
+        graph.add_call_with_location(&b, &f, Span { start: 50, end: 60 });
+        // petgraph は後に追加したエッジから列挙するため、b → a の順で追加して
+        // 捕捉される側のパス (a) が先に処理されるようにする
+        graph.add_call_with_location(&caller, &b, Span { start: 300, end: 310 });
+        graph.add_call_with_location(&caller, &a, Span { start: 150, end: 160 });
+
+        let propagated = compute_propagated_throws(&caller, &signatures, &graph);
+        assert_eq!(
+            propagated.len(),
+            1,
+            "SharedError should propagate via b() (outside try-catch). Got: {:?}",
+            propagated.iter().map(|p| &p.error_type).collect::<Vec<_>>()
+        );
+        assert_eq!(propagated[0].error_type, ErrorType::Named("SharedError".into()));
+        assert_eq!(propagated[0].path, vec![caller.clone(), b.clone()]);
+    }
+
     // 同名メソッド（a.find() と b.find()）が別の関数を指すケース。
     // a.find() は throw する側で try-catch 内、b.find() は throw しない側で try-catch 外。
     // 名前ベースマッチングだと b.find() の call site span も a_find のエッジで拾われ、

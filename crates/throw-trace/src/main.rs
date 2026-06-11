@@ -10,6 +10,7 @@ use clap::Parser;
 use fixer::fix_files;
 use loader::FileLoader;
 use reporter::{report, OutputFormat};
+use std::process::ExitCode;
 
 #[derive(Parser)]
 #[command(name = "throw-trace")]
@@ -47,7 +48,19 @@ enum Commands {
     },
 }
 
-fn main() -> Result<()> {
+// exit code 規約: 0 = 違反なし, 1 = 違反検出, 2 = 実行時エラー
+// (clippy/eslint と同様、CI が「違反あり」と「ツール故障」を区別できるようにする)
+fn main() -> ExitCode {
+    match run() {
+        Ok(code) => code,
+        Err(e) => {
+            eprintln!("error: {e:#}");
+            ExitCode::from(2)
+        }
+    }
+}
+
+fn run() -> Result<ExitCode> {
     let cli = Cli::parse();
 
     match cli.command {
@@ -60,7 +73,7 @@ fn main() -> Result<()> {
 
             if files.is_empty() {
                 println!("No TypeScript files found");
-                return Ok(());
+                return Ok(ExitCode::SUCCESS);
             }
 
             let mut analyzer = Analyzer::new();
@@ -72,10 +85,10 @@ fn main() -> Result<()> {
             report(&diagnostics, &lsp_violations, files.len(), output_format)?;
 
             if !diagnostics.is_empty() || !lsp_violations.is_empty() {
-                std::process::exit(1);
+                return Ok(ExitCode::from(1));
             }
 
-            Ok(())
+            Ok(ExitCode::SUCCESS)
         }
         Some(Commands::Fix { paths, exclude }) => {
             let loader = FileLoader::new(&exclude)?;
@@ -83,7 +96,7 @@ fn main() -> Result<()> {
 
             if files.is_empty() {
                 println!("No TypeScript files found");
-                return Ok(());
+                return Ok(ExitCode::SUCCESS);
             }
 
             let mut analyzer = Analyzer::new();
@@ -93,11 +106,11 @@ fn main() -> Result<()> {
             let fixed_count = fix_files(&diagnostics)?;
 
             println!("Fixed {fixed_count} file(s)");
-            Ok(())
+            Ok(ExitCode::SUCCESS)
         }
         None => {
             println!("Use --help for usage information");
-            Ok(())
+            Ok(ExitCode::SUCCESS)
         }
     }
 }
