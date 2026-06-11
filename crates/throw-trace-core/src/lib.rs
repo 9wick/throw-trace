@@ -639,8 +639,11 @@ mod tests {
             }
         }
 
-        let origin_fn =
-            FunctionId::new(PathBuf::from("factory.ts"), "createHandler", Span { start: 0, end: 300 });
+        let origin_fn = FunctionId::new(
+            PathBuf::from("factory.ts"),
+            "createHandler",
+            Span { start: 0, end: 300 },
+        );
         let caller_fn =
             FunctionId::new(PathBuf::from("setup.ts"), "setup", Span { start: 0, end: 100 });
 

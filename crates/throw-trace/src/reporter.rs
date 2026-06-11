@@ -239,10 +239,8 @@ mod tests {
 
     #[test]
     fn help_types_joins_named_types() {
-        let missing = vec![
-            propagated(ErrorType::Named("AppError".into())),
-            propagated(ErrorType::Unknown),
-        ];
+        let missing =
+            vec![propagated(ErrorType::Named("AppError".into())), propagated(ErrorType::Unknown)];
         assert_eq!(help_types(&missing), "AppError, unknown");
     }
 }
