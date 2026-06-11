@@ -1,6 +1,5 @@
 use crate::cache::{
-    resolution_fingerprint_entries_for_files, workspace_source_fingerprint, CacheStore,
-    CachedExtraction, CachedTypeResolver,
+    resolution_fingerprint_entries_for_files, CacheStore, CachedExtraction, CachedTypeResolver,
 };
 use anyhow::Result;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -277,21 +276,12 @@ impl Analyzer {
 
     pub fn generate_diagnostics(&mut self) -> Vec<Diagnostic> {
         let function_ids = self.sorted_function_ids();
-        let workspace_source_fingerprint = workspace_source_fingerprint(
-            &std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-        );
 
         let all_diagnostics = if let Ok(resolver) = TsServerTypeResolver::new() {
-            let fingerprints = self.dependency_fingerprints(
-                &function_ids,
-                "tsserver",
-                &workspace_source_fingerprint,
-            );
-            let mut resolver = CachedTypeResolver::new(
-                &mut self.cache,
-                resolver,
-                workspace_source_fingerprint.clone(),
-            );
+            let fingerprints = self.dependency_fingerprints(&function_ids, "tsserver");
+            let scope_fingerprint = self.type_environment_fingerprint();
+            let mut resolver =
+                CachedTypeResolver::new(&mut self.cache, resolver, scope_fingerprint);
             let mut diagnostics = Vec::new();
 
             for func_id in function_ids {
@@ -311,7 +301,9 @@ impl Analyzer {
                 }
 
                 let propagated = compute_propagated_throws(&func_id, &self.signatures, &self.graph);
+                resolver.take_recorded();
                 let missing = find_missing_declarations(sig, &propagated, &mut resolver);
+                let type_check_dependencies = resolver.take_recorded();
                 let diagnostic = if missing.is_empty() {
                     None
                 } else {
@@ -320,6 +312,7 @@ impl Analyzer {
                 resolver.cache_mut().update_diagnostic(
                     &func_id,
                     fingerprint.clone(),
+                    type_check_dependencies,
                     diagnostic.clone(),
                 );
                 if let Some(diagnostic) = diagnostic {
@@ -330,8 +323,7 @@ impl Analyzer {
             diagnostics
         } else {
             eprintln!("warning: tsserver not available, falling back to string comparison");
-            let fingerprints =
-                self.dependency_fingerprints(&function_ids, "noop", &workspace_source_fingerprint);
+            let fingerprints = self.dependency_fingerprints(&function_ids, "noop");
             let mut resolver = throw_trace_core::NoOpTypeResolver;
             let mut diagnostics = Vec::new();
 
@@ -357,7 +349,12 @@ impl Analyzer {
                 } else {
                     Some(Diagnostic { function: func_id.clone(), missing_throws: missing })
                 };
-                self.cache.update_diagnostic(&func_id, fingerprint.clone(), diagnostic.clone());
+                self.cache.update_diagnostic(
+                    &func_id,
+                    fingerprint.clone(),
+                    Vec::new(),
+                    diagnostic.clone(),
+                );
                 if let Some(diagnostic) = diagnostic {
                     diagnostics.push(diagnostic);
                 }
@@ -383,35 +380,29 @@ impl Analyzer {
         &self,
         function_ids: &[FunctionId],
         resolver_mode: &str,
-        workspace_source_fingerprint: &str,
     ) -> HashMap<FunctionId, String> {
+        // 全関数で共通の部分は一度だけ計算する
+        let shared_parts: Vec<(String, String)> = vec![
+            ("resolver_mode".to_string(), resolver_mode.to_string()),
+            ("workspace_fingerprint".to_string(), self.cache.workspace_fingerprint().to_string()),
+            ("method_signatures".to_string(), self.method_signatures_hash()),
+            ("type_relations".to_string(), self.type_relations_hash()),
+        ];
+
         function_ids
             .iter()
-            .map(|func_id| {
-                (
-                    func_id.clone(),
-                    self.dependency_fingerprint(
-                        func_id,
-                        resolver_mode,
-                        workspace_source_fingerprint,
-                    ),
-                )
-            })
+            .map(|func_id| (func_id.clone(), self.dependency_fingerprint(func_id, &shared_parts)))
             .collect()
     }
 
+    // 関数自身と推移的 callee の signature・call edge にのみ依存させる。
+    // ワークスペース全体のソースハッシュ等を混ぜると無関係な変更で全 miss する
     fn dependency_fingerprint(
         &self,
         func_id: &FunctionId,
-        resolver_mode: &str,
-        workspace_source_fingerprint: &str,
+        shared_parts: &[(String, String)],
     ) -> String {
-        let mut parts: Vec<(String, String)> = vec![
-            ("resolver_mode".to_string(), resolver_mode.to_string()),
-            ("workspace_fingerprint".to_string(), self.cache.workspace_fingerprint().to_string()),
-            ("workspace_source_fingerprint".to_string(), workspace_source_fingerprint.to_string()),
-            ("type_checks".to_string(), self.cache.type_checks_fingerprint()),
-        ];
+        let mut parts: Vec<(String, String)> = shared_parts.to_vec();
 
         if let Some(sig) = self.signatures.get(func_id) {
             parts.push(("function_signature".to_string(), CacheStore::stable_json_hash(sig)));
@@ -427,15 +418,28 @@ impl Analyzer {
             parts.push(("call_edge".to_string(), CacheStore::stable_json_hash(&edge)));
         }
 
+        CacheStore::stable_json_hash(&parts)
+    }
+
+    fn method_signatures_hash(&self) -> String {
         let mut methods = self.method_signatures.clone();
         methods.sort_by_key(method_signature_sort_key);
-        parts.push(("method_signatures".to_string(), CacheStore::stable_json_hash(&methods)));
+        CacheStore::stable_json_hash(&methods)
+    }
 
+    fn type_relations_hash(&self) -> String {
         let mut relations = self.type_relations.clone();
         relations.sort_by_key(type_relation_sort_key);
-        parts.push(("type_relations".to_string(), CacheStore::stable_json_hash(&relations)));
+        CacheStore::stable_json_hash(&relations)
+    }
 
-        CacheStore::stable_json_hash(&parts)
+    // 型チェック結果の有効範囲: 解析対象の型階層 (type_relations) と
+    // 解決設定 (workspace_fingerprint) が変わらない限り再利用できる
+    fn type_environment_fingerprint(&self) -> String {
+        CacheStore::stable_json_hash(&(
+            self.cache.workspace_fingerprint(),
+            self.type_relations_hash(),
+        ))
     }
 
     fn sorted_transitive_callees(&self, func_id: &FunctionId) -> Vec<FunctionId> {
@@ -477,9 +481,7 @@ impl Analyzer {
 
     pub fn generate_lsp_violations(&mut self) -> Vec<LspViolation> {
         let all_violations = if let Ok(resolver) = TsServerTypeResolver::new() {
-            let scope_fingerprint = workspace_source_fingerprint(
-                &std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-            );
+            let scope_fingerprint = self.type_environment_fingerprint();
             let mut resolver =
                 CachedTypeResolver::new(&mut self.cache, resolver, scope_fingerprint);
             generate_lsp_violations(
