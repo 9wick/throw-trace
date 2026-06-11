@@ -30,14 +30,35 @@ fn check_with_json_format() {
         .stdout(predicate::str::contains("\"diagnostics\""));
 }
 
+// 存在しないパスの黙殺は CI のサイレント成功につながるため、
+// 違反検出 (1) と区別できる exit code 2 でエラーにする
 #[test]
-fn check_nonexistent_path() {
+fn check_nonexistent_path_exits_with_error() {
     let mut cmd = Command::cargo_bin("throw-trace").unwrap();
     cmd.current_dir(workspace_root())
         .args(["check", "nonexistent/path"])
         .assert()
-        .success()
-        .stdout(predicate::str::contains("No TypeScript files found"));
+        .code(2)
+        .stderr(predicate::str::contains("nonexistent/path"));
+}
+
+#[test]
+fn check_findings_exit_with_code_1() {
+    let mut cmd = Command::cargo_bin("throw-trace").unwrap();
+    cmd.current_dir(workspace_root())
+        .args(["check", "tests/fixtures/simple_throw.ts"])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains("missing @throws"));
+}
+
+#[test]
+fn check_invalid_format_exits_with_error() {
+    let mut cmd = Command::cargo_bin("throw-trace").unwrap();
+    cmd.current_dir(workspace_root())
+        .args(["check", "tests/fixtures/simple_throw.ts", "--format", "yaml"])
+        .assert()
+        .code(2);
 }
 
 #[test]
@@ -326,12 +347,12 @@ class ValidationError extends Error {}
 }
 
 #[test]
-fn fix_nonexistent_path() {
+fn fix_nonexistent_path_exits_with_error() {
     let mut cmd = Command::cargo_bin("throw-trace").unwrap();
     cmd.args(["fix", "nonexistent/path"])
         .assert()
-        .success()
-        .stdout(predicate::str::contains("No TypeScript files found"));
+        .code(2)
+        .stderr(predicate::str::contains("nonexistent/path"));
 }
 
 #[test]
@@ -420,4 +441,60 @@ fn fix_handles_crlf_line_endings() {
     let content = std::fs::read_to_string(&test_file).unwrap();
     assert!(content.contains("@throws {ValidationError}"));
     assert!(content.contains("function validate"));
+    assert!(
+        !content.replace("\r\n", "").contains('\n'),
+        "CRLF line endings must be preserved, but found bare LF: {content:?}"
+    );
+}
+
+#[test]
+fn fix_preserves_missing_trailing_newline() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let test_file = temp_dir.path().join("test.ts");
+
+    let content_without_trailing_newline = "function validate(input: string) {\n  if (!input) {\n    throw new ValidationError(\"Input required\");\n  }\n}\n\nclass ValidationError extends Error {}";
+    std::fs::write(&test_file, content_without_trailing_newline).unwrap();
+
+    let mut cmd = Command::cargo_bin("throw-trace").unwrap();
+    cmd.arg("fix")
+        .arg(test_file.to_str().unwrap())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Fixed 1 file"));
+
+    let content = std::fs::read_to_string(&test_file).unwrap();
+    assert!(content.contains("@throws {ValidationError}"));
+    assert!(
+        !content.ends_with('\n'),
+        "file without trailing newline must stay without one, got: {content:?}"
+    );
+}
+
+#[test]
+fn fix_preserves_bom_at_file_start() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let test_file = temp_dir.path().join("test.ts");
+
+    let bom_content = "\u{FEFF}function validate(input: string) {\n  if (!input) {\n    throw new ValidationError(\"Input required\");\n  }\n}\n\nclass ValidationError extends Error {}\n";
+    std::fs::write(&test_file, bom_content).unwrap();
+
+    let mut cmd = Command::cargo_bin("throw-trace").unwrap();
+    cmd.arg("fix")
+        .arg(test_file.to_str().unwrap())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Fixed 1 file"));
+
+    let content = std::fs::read_to_string(&test_file).unwrap();
+    assert!(content.contains("@throws {ValidationError}"));
+    assert!(
+        content.starts_with('\u{FEFF}'),
+        "BOM must remain at file start, got: {:?}",
+        content.chars().take(40).collect::<String>()
+    );
+    assert_eq!(
+        content.matches('\u{FEFF}').count(),
+        1,
+        "BOM must not be duplicated or moved into the file body"
+    );
 }
