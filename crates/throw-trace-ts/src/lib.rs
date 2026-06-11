@@ -312,6 +312,132 @@ try {
         );
     }
 
+    // instanceof の左辺が catch パラメータでない場合、
+    // 捕捉した例外の型チェックではないので caught_types に入れてはならない
+    #[test]
+    fn instanceof_on_unrelated_variable_not_in_caught_types() {
+        let source = r"
+try {
+    validate();
+} catch (e) {
+    if (otherVar instanceof NetworkError) {
+        return;
+    }
+    throw e;
+}
+";
+        let blocks = extract_try_catch_blocks(source);
+        assert_eq!(blocks.len(), 1);
+        assert!(
+            blocks[0].caught_types.is_empty(),
+            "instanceof on a variable other than the catch param must not count as caught, got: {:?}",
+            blocks[0].caught_types
+        );
+    }
+
+    // instanceof 分岐内の switch が全ケースで終端する場合は捕捉済みとみなす
+    #[test]
+    fn instanceof_with_exhaustive_switch_in_caught_types() {
+        let source = r"
+try {
+    validate();
+} catch (e) {
+    if (e instanceof SomeError) {
+        switch (e.code) {
+            case 1:
+                return null;
+            case 2:
+                throw new WrappedError(e);
+            default:
+                return null;
+        }
+    }
+    throw e;
+}
+";
+        let blocks = extract_try_catch_blocks(source);
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(
+            blocks[0].caught_types,
+            vec!["SomeError"],
+            "switch terminating in every case (incl. default) should count as caught"
+        );
+    }
+
+    // default がない switch はフォールスルーし得るので終端とみなさない
+    #[test]
+    fn instanceof_with_switch_without_default_not_in_caught_types() {
+        let source = r"
+try {
+    validate();
+} catch (e) {
+    if (e instanceof SomeError) {
+        switch (e.code) {
+            case 1:
+                return null;
+        }
+    }
+    throw e;
+}
+";
+        let blocks = extract_try_catch_blocks(source);
+        assert_eq!(blocks.len(), 1);
+        assert!(
+            blocks[0].caught_types.is_empty(),
+            "switch without default may fall through, must not count as caught, got: {:?}",
+            blocks[0].caught_types
+        );
+    }
+
+    // switch 内で catch パラメータを rethrow する場合は捕捉とみなさない
+    #[test]
+    fn instanceof_with_switch_rethrowing_catch_param_not_in_caught_types() {
+        let source = r"
+try {
+    validate();
+} catch (e) {
+    if (e instanceof SomeError) {
+        switch (e.code) {
+            case 1:
+                return null;
+            default:
+                throw e;
+        }
+    }
+    throw e;
+}
+";
+        let blocks = extract_try_catch_blocks(source);
+        assert_eq!(blocks.len(), 1);
+        assert!(
+            blocks[0].caught_types.is_empty(),
+            "rethrowing the catch param inside switch must not count as caught, got: {:?}",
+            blocks[0].caught_types
+        );
+    }
+
+    // パラメータなしの catch 節では例外を参照できないため、
+    // instanceof による捕捉型は存在し得ない
+    #[test]
+    fn instanceof_in_paramless_catch_not_in_caught_types() {
+        let source = r"
+try {
+    validate();
+} catch {
+    if (globalErr instanceof NetworkError) {
+        return;
+    }
+}
+";
+        let blocks = extract_try_catch_blocks(source);
+        assert_eq!(blocks.len(), 1);
+        assert!(
+            blocks[0].caught_types.is_empty(),
+            "paramless catch cannot type-check the caught error, got: {:?}",
+            blocks[0].caught_types
+        );
+    }
+
     #[test]
     fn instanceof_with_throw_new_in_caught_types() {
         let source = r"
