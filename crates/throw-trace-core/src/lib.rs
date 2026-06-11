@@ -618,6 +618,68 @@ mod tests {
         assert_eq!(violations[0].illegal_throws[0], ErrorType::Named("IOError".into()));
     }
 
+    // クロスファイル伝播した Unknown throw の型解決は、診断対象関数のファイル
+    // ではなく throw 元のファイルに対して行う必要がある。span は throw 元の
+    // ソース上のオフセットなので、別ファイルに適用すると解決に失敗する
+    #[test]
+    fn cross_file_unknown_resolves_against_origin_file() {
+        struct OriginFileResolver;
+        impl TypeResolver for OriginFileResolver {
+            fn is_assignable_to(
+                &mut self,
+                _file_path: &std::path::Path,
+                thrown_type: &str,
+                declared_type: &str,
+            ) -> bool {
+                thrown_type == declared_type
+            }
+            // 実際の tsserver と同様、throw 元のファイルでのみ型解決が成功する
+            fn resolve_type(&mut self, file_path: &std::path::Path, _span: Span) -> Option<String> {
+                (file_path == std::path::Path::new("factory.ts")).then(|| "Error".to_string())
+            }
+        }
+
+        let origin_fn = FunctionId::new(
+            PathBuf::from("factory.ts"),
+            "createHandler",
+            Span { start: 0, end: 300 },
+        );
+        let caller_fn =
+            FunctionId::new(PathBuf::from("setup.ts"), "setup", Span { start: 0, end: 100 });
+
+        let sig = FunctionSignature {
+            id: caller_fn.clone(),
+            name_span: Span { start: 13, end: 18 },
+            declared_throws: vec![DeclaredThrow {
+                error_type: "Error".into(),
+                description: None,
+                span: Span { start: 0, end: 0 },
+            }],
+            direct_throws: vec![],
+            calls: vec![],
+            try_catch_blocks: vec![],
+            is_async: false,
+            class_name: None,
+        };
+
+        let propagated = vec![PropagatedThrow {
+            error_type: ErrorType::Unknown,
+            origin: ThrowSite {
+                location: Span { start: 217, end: 227 },
+                error_type: ErrorType::Unknown,
+            },
+            origin_function: origin_fn,
+            path: vec![caller_fn],
+        }];
+
+        let missing = find_missing_declarations(&sig, &propagated, &mut OriginFileResolver);
+        assert!(
+            missing.is_empty(),
+            "declared @throws {{Error}} should satisfy Unknown resolved as Error at origin file, got: {:?}",
+            missing.iter().map(|m| &m.error_type).collect::<Vec<_>>()
+        );
+    }
+
     // =============================================================
     // catch-all / catch_has_rethrow の伝播判定
     // =============================================================

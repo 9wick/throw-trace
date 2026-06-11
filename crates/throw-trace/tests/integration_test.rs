@@ -140,6 +140,19 @@ fn check_cross_file_with_declaration_passes() {
         .stdout(predicate::str::contains("No issues found"));
 }
 
+// クロスファイル伝播した Unknown throw（型注釈付きパラメータの rethrow）が
+// throw 元ファイルの文脈で型解決され、上位型 Error の宣言で満たせること
+#[test]
+#[ignore = "requires tsserver installed"]
+fn check_cross_file_rethrow_resolves_against_origin_file() {
+    let mut cmd = Command::cargo_bin("throw-trace").unwrap();
+    cmd.current_dir(workspace_root())
+        .args(["check", "tests/fixtures/cross_file_rethrow/setup.ts"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No issues found"));
+}
+
 #[test]
 #[ignore = "requires tsserver installed"]
 fn check_cross_file_circular_no_infinite_loop() {

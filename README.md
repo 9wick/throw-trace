@@ -117,6 +117,24 @@ throw new Error("msg");               // Named型として検出
 throw "error";                        // Unknown型
 ```
 
+### Unknown型の扱い
+
+throw式から型名を静的に特定できない場合、その throw は `Unknown` として扱われます。
+tsserverが利用可能なら throw 元のソース位置で型解決を試み、解決できた型名（例: `Error`）で照合します。
+
+型解決できなかった `Unknown` は、`@throws {unknown}` で宣言すると満たせます：
+
+```typescript
+/**
+ * @throws {unknown}
+ */
+function rethrow(e: unknown) {
+  throw e;
+}
+```
+
+`throw-trace fix` が生成する `@throws {unknown} from <file>:<func>` の `from` 句は伝播元を示す補足情報で、照合には型名のみが使われます（`from` 句なしでも満たせます）。
+
 ### try-catch捕捉
 
 ```typescript

@@ -3,7 +3,9 @@
 class HandlerError extends Error {}
 
 // --- throw する関数を返す ---
-// 現状: getHandler 自体が throw 元として伝播される（内部関数の throw が漏れる）
+// [FALSE POSITIVE] getHandler 自体は呼んでも throw しない（関数を返すだけ）。
+// 現状: 無名関数に signature が作られず、内部の throw が getHandler に帰属される。
+// 登録パターン（返した closure を呼ばず登録だけする）は 42_closure_registration.ts を参照
 
 /**
  * @throws {HandlerError} from 34_higher_order.ts:getHandler

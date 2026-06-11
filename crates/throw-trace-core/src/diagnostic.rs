@@ -37,7 +37,7 @@ pub fn find_missing_declarations<R: TypeResolver>(
             let (is_decl, resolved_type) = is_declared_with_resolution(
                 &p.error_type,
                 p.origin.location,
-                &sig.id.file_path,
+                &p.origin_function.file_path,
                 &declared_types,
                 resolver,
             );
