@@ -40,6 +40,41 @@ throw-trace check src/ --exclude "**/*.test.ts"
 throw-trace check src/ --format json
 ```
 
+### 自動修正（fix）
+
+検出した`@throws`宣言の漏れを、JSDocコメントとして自動挿入します。
+既存のJSDocがある場合は`@throws`行を追記し、ない場合は新しくJSDocブロックを作成します。
+
+```bash
+# カレントディレクトリを修正
+throw-trace fix
+
+# 特定のファイルやディレクトリを指定
+throw-trace fix src/
+
+# 除外パターンを指定
+throw-trace fix src/ --exclude "**/*.test.ts"
+```
+
+挿入される宣言には伝播元の情報が含まれます：
+
+```typescript
+/**
+ * @throws {ValidationError} from validator.ts:validate
+ */
+function createUser(name: string) {
+  validate(name);
+}
+```
+
+### Exit code
+
+| code | 意味 |
+|------|------|
+| 0 | 違反なし |
+| 1 | `@throws`宣言の漏れを検出 |
+| 2 | 実行時エラー（存在しないパス、不正なオプションなど） |
+
 ## 検出例
 
 以下のコードでは、`createUser`関数が`validate`を呼び出していますが、`@throws`が宣言されていません。
