@@ -165,12 +165,14 @@ fn find_jsdoc_end_line(lines: &[&str], func_line: usize) -> Option<usize> {
 
     let end_line = end_line?;
 
+    // JSDoc ブロックの内側だけを遡る。コメント行以外に到達した場合は、
+    // 末尾ブロックコメント付きのコード行を JSDoc と誤認しているので打ち切る
     for i in (0..=end_line).rev() {
         let trimmed = lines[i].trim();
         if trimmed.starts_with("/**") {
             return Some(end_line);
         }
-        if trimmed.starts_with("/*") && !trimmed.starts_with("/**") {
+        if !trimmed.starts_with('*') {
             return None;
         }
     }
@@ -212,4 +214,45 @@ fn format_from_info(origin_function: &FunctionId) -> String {
         origin_function.file_path.file_name().and_then(|s| s.to_str()).unwrap_or("unknown");
 
     format!("{file_name}:{}", origin_function.name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::find_jsdoc_end_line;
+
+    #[test]
+    fn trailing_block_comment_on_code_line_is_not_jsdoc() {
+        // 上方に無関係な JSDoc があっても、コード行を JSDoc 終端と誤認してはならない
+        let lines = vec![
+            "/** unrelated doc */",
+            "function a() {}",
+            "const x = 1; /* tail */",
+            "function b() {}",
+        ];
+        assert_eq!(find_jsdoc_end_line(&lines, 3), None);
+    }
+
+    #[test]
+    fn code_between_jsdoc_start_and_end_is_not_jsdoc() {
+        let lines = vec!["/** doc for a */", "const a = 1; /* note */", "function b() {}"];
+        assert_eq!(find_jsdoc_end_line(&lines, 2), None);
+    }
+
+    #[test]
+    fn single_line_jsdoc_is_found() {
+        let lines = vec!["/** doc */", "function a() {}"];
+        assert_eq!(find_jsdoc_end_line(&lines, 1), Some(0));
+    }
+
+    #[test]
+    fn multiline_jsdoc_is_found() {
+        let lines = vec!["/**", " * doc", " */", "function a() {}"];
+        assert_eq!(find_jsdoc_end_line(&lines, 3), Some(2));
+    }
+
+    #[test]
+    fn plain_block_comment_is_not_jsdoc() {
+        let lines = vec!["/* not doc */", "function a() {}"];
+        assert_eq!(find_jsdoc_end_line(&lines, 1), None);
+    }
 }

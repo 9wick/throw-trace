@@ -1,8 +1,8 @@
 use compact_str::CompactString;
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
-    BindingPatternKind, CallExpression, Class, Expression, Function, MethodDefinition, Statement,
-    TSInterfaceDeclaration, TSType, ThrowStatement, TryStatement,
+    BindingPatternKind, CallExpression, Class, Expression, Function, MethodDefinition,
+    PropertyDefinition, Statement, TSInterfaceDeclaration, TSType, ThrowStatement, TryStatement,
 };
 use oxc_ast_visit::{walk, Visit};
 use oxc_parser::Parser;
@@ -93,6 +93,56 @@ impl<'a> FunctionExtractor<'a> {
 
     fn end_function(&mut self) {
         self.scope_stack.pop();
+    }
+
+    // `const f = () => {}` / `const f = function() {}` を名前付き関数として抽出する。
+    // 処理した場合は true を返し、呼び出し側はデフォルトの walk をスキップする
+    fn visit_function_like_declarator(
+        &mut self,
+        declarator: &oxc_ast::ast::VariableDeclarator<'a>,
+        jsdoc_anchor: u32,
+    ) -> bool {
+        let name = match &declarator.id.kind {
+            BindingPatternKind::BindingIdentifier(id) => Some((id.name.as_str(), id.span)),
+            _ => None,
+        };
+        match &declarator.init {
+            Some(Expression::ArrowFunctionExpression(arrow)) => {
+                if let Some((name, name_span)) = name {
+                    let comment = preceding_jsdoc(self.source, jsdoc_anchor);
+                    self.begin_function(
+                        name,
+                        name_span,
+                        arrow.span,
+                        arrow.r#async,
+                        comment.as_deref(),
+                    );
+                    walk::walk_arrow_function_expression(self, arrow);
+                    self.end_function();
+                } else {
+                    walk::walk_arrow_function_expression(self, arrow);
+                }
+                true
+            }
+            Some(Expression::FunctionExpression(func)) => {
+                if let Some((name, name_span)) = name {
+                    let comment = preceding_jsdoc(self.source, jsdoc_anchor);
+                    self.begin_function(
+                        name,
+                        name_span,
+                        func.span,
+                        func.r#async,
+                        comment.as_deref(),
+                    );
+                    walk::walk_function(self, func, ScopeFlags::empty());
+                    self.end_function();
+                } else {
+                    walk::walk_function(self, func, ScopeFlags::empty());
+                }
+                true
+            }
+            _ => false,
+        }
     }
 
     fn current_sig_mut(&mut self) -> Option<&mut FunctionSignature> {
@@ -333,23 +383,42 @@ pub(crate) fn extract_instanceof_types(
     let mut types = Vec::new();
     for stmt in &block.body {
         if let Statement::IfStatement(if_stmt) = stmt {
-            if let Expression::BinaryExpression(bin) = &if_stmt.test {
-                if bin.operator == oxc_ast::ast::BinaryOperator::Instanceof {
-                    // 左辺が catch パラメータ以外なら、捕捉した例外の型チェックではない
-                    let left_is_catch_param = matches!(&bin.left, Expression::Identifier(id) if id.name.as_str() == param);
-                    if !left_is_catch_param {
-                        continue;
-                    }
-                    if let Expression::Identifier(id) = &bin.right {
-                        if block_terminates(&if_stmt.consequent, catch_param) {
-                            types.push(id.name.as_str().into());
-                        }
-                    }
-                }
-            }
+            collect_instanceof_chain(if_stmt, param, &mut types);
         }
     }
     types
+}
+
+// `if (e instanceof A) ... else if (e instanceof B) ...` のチェーンを辿って
+// 捕捉済みの型を収集する。else-if への到達が例外型のみで決まるよう、
+// チェーン上のすべての条件が catch パラメータの instanceof で、かつ
+// 分岐が終端する場合に限って後続を辿る
+fn collect_instanceof_chain(
+    if_stmt: &oxc_ast::ast::IfStatement<'_>,
+    param: &str,
+    types: &mut Vec<CompactString>,
+) {
+    let Expression::BinaryExpression(bin) = &if_stmt.test else {
+        return;
+    };
+    if bin.operator != oxc_ast::ast::BinaryOperator::Instanceof {
+        return;
+    }
+    // 左辺が catch パラメータ以外なら、捕捉した例外の型チェックではない
+    if !matches!(&bin.left, Expression::Identifier(id) if id.name.as_str() == param) {
+        return;
+    }
+    let Expression::Identifier(id) = &bin.right else {
+        return;
+    };
+    if !block_terminates(&if_stmt.consequent, Some(param)) {
+        return;
+    }
+    types.push(id.name.as_str().into());
+
+    if let Some(Statement::IfStatement(next)) = &if_stmt.alternate {
+        collect_instanceof_chain(next, param, types);
+    }
 }
 
 fn is_catch_param_rethrow(stmt: &ThrowStatement<'_>, catch_param: Option<&str>) -> bool {
@@ -543,21 +612,7 @@ impl<'a> Visit<'a> for FunctionExtractor<'a> {
         match &decl.declaration {
             Some(oxc_ast::ast::Declaration::VariableDeclaration(var_decl)) => {
                 for declarator in &var_decl.declarations {
-                    if let Some(Expression::ArrowFunctionExpression(arrow)) = &declarator.init {
-                        if let BindingPatternKind::BindingIdentifier(id) = &declarator.id.kind {
-                            let comment = preceding_jsdoc(self.source, decl.span.start);
-                            self.begin_function(
-                                id.name.as_str(),
-                                id.span,
-                                arrow.span,
-                                arrow.r#async,
-                                comment.as_deref(),
-                            );
-                            walk::walk_arrow_function_expression(self, arrow);
-                            self.end_function();
-                        } else {
-                            walk::walk_arrow_function_expression(self, arrow);
-                        }
+                    if self.visit_function_like_declarator(declarator, decl.span.start) {
                         continue;
                     }
                     walk::walk_variable_declarator(self, declarator);
@@ -594,22 +649,8 @@ impl<'a> Visit<'a> for FunctionExtractor<'a> {
                 }
             }
 
-            if let Some(Expression::ArrowFunctionExpression(arrow)) = &declarator.init {
-                if let BindingPatternKind::BindingIdentifier(id) = &declarator.id.kind {
-                    let comment = preceding_jsdoc(self.source, decl.span.start);
-                    self.begin_function(
-                        id.name.as_str(),
-                        id.span,
-                        arrow.span,
-                        arrow.r#async,
-                        comment.as_deref(),
-                    );
-                    walk::walk_arrow_function_expression(self, arrow);
-                    self.end_function();
-                } else {
-                    walk::walk_arrow_function_expression(self, arrow);
-                }
-                // Skip the default variable walk for this declarator to avoid re-entering
+            // Skip the default variable walk for handled declarators to avoid re-entering
+            if self.visit_function_like_declarator(declarator, decl.span.start) {
                 continue;
             }
             walk::walk_variable_declarator(self, declarator);
@@ -696,6 +737,43 @@ impl<'a> Visit<'a> for FunctionExtractor<'a> {
         );
         walk::walk_method_definition(self, method);
         self.end_function();
+    }
+
+    // クラスプロパティに代入された関数（`onClick = () => {...}` 等）は
+    // メソッド相当として名前付きシグネチャを生成する。シグネチャがないと
+    // 内部の throw が喪失するか外側の関数へ誤帰属する
+    fn visit_property_definition(&mut self, prop: &PropertyDefinition<'a>) {
+        let oxc_ast::ast::PropertyKey::StaticIdentifier(key_id) = &prop.key else {
+            walk::walk_property_definition(self, prop);
+            return;
+        };
+
+        let comment = preceding_jsdoc(self.source, prop.span.start);
+        match &prop.value {
+            Some(Expression::ArrowFunctionExpression(arrow)) => {
+                self.begin_function(
+                    key_id.name.as_str(),
+                    key_id.span,
+                    arrow.span,
+                    arrow.r#async,
+                    comment.as_deref(),
+                );
+                walk::walk_arrow_function_expression(self, arrow);
+                self.end_function();
+            }
+            Some(Expression::FunctionExpression(func)) => {
+                self.begin_function(
+                    key_id.name.as_str(),
+                    key_id.span,
+                    func.span,
+                    func.r#async,
+                    comment.as_deref(),
+                );
+                walk::walk_function(self, func, ScopeFlags::empty());
+                self.end_function();
+            }
+            _ => walk::walk_property_definition(self, prop),
+        }
     }
 }
 

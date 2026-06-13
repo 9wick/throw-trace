@@ -1,10 +1,11 @@
 use anyhow::{Context, Result};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use ignore::WalkBuilder;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 pub struct FileLoader {
     exclude_patterns: GlobSet,
+    base_dir: PathBuf,
 }
 
 impl FileLoader {
@@ -13,7 +14,8 @@ impl FileLoader {
         for pattern in exclude_patterns {
             builder.add(Glob::new(pattern).context("Invalid glob pattern")?);
         }
-        Ok(Self { exclude_patterns: builder.build()? })
+        let base_dir = std::env::current_dir().context("cannot determine current directory")?;
+        Ok(Self { exclude_patterns: builder.build()?, base_dir })
     }
 
     pub fn collect_ts_files(&self, paths: &[String]) -> Result<Vec<PathBuf>> {
@@ -51,6 +53,42 @@ impl FileLoader {
     }
 
     fn is_excluded(&self, path: &Path) -> bool {
-        self.exclude_patterns.is_match(path)
+        // walk 結果は引数の形式（`./src/a.ts` や絶対パス）を引き継ぐため、
+        // ワークスペース相対に正規化してからパターン照合する
+        let relative = path.strip_prefix(&self.base_dir).unwrap_or(path);
+        let normalized: PathBuf =
+            relative.components().filter(|c| !matches!(c, Component::CurDir)).collect();
+        self.exclude_patterns.is_match(&normalized)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exclude_matches_plain_relative_path() {
+        let loader = FileLoader::new(&["src/**".to_string()]).unwrap();
+        assert!(loader.is_excluded(Path::new("src/a.ts")));
+    }
+
+    #[test]
+    fn exclude_matches_dot_prefixed_path() {
+        // `check .` の walk 結果は `./src/a.ts` 形式になる
+        let loader = FileLoader::new(&["src/**".to_string()]).unwrap();
+        assert!(loader.is_excluded(Path::new("./src/a.ts")));
+    }
+
+    #[test]
+    fn exclude_matches_absolute_path_under_cwd() {
+        let loader = FileLoader::new(&["src/**".to_string()]).unwrap();
+        let abs = std::env::current_dir().unwrap().join("src/a.ts");
+        assert!(loader.is_excluded(&abs));
+    }
+
+    #[test]
+    fn exclude_does_not_match_unrelated_path() {
+        let loader = FileLoader::new(&["src/**".to_string()]).unwrap();
+        assert!(!loader.is_excluded(Path::new("./lib/a.ts")));
     }
 }

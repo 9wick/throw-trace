@@ -1,6 +1,39 @@
 use serde::Serialize;
+use std::collections::HashMap;
 use std::io::{self, Write};
-use throw_trace_core::{Diagnostic, LspViolation};
+use std::path::{Path, PathBuf};
+use throw_trace_core::{Diagnostic, LspViolation, PropagatedThrow};
+
+// throw 元ファイルを読んでバイトオフセットを 1-based 行番号へ変換する。
+// 同一ファイルへの重複 I/O を避けるため report 呼び出し単位でキャッシュする
+#[derive(Default)]
+struct OriginResolver {
+    sources: HashMap<PathBuf, Option<String>>,
+}
+
+impl OriginResolver {
+    fn line_of(&mut self, file_path: &Path, byte_offset: u32) -> Option<u32> {
+        let source = self
+            .sources
+            .entry(file_path.to_path_buf())
+            .or_insert_with(|| std::fs::read_to_string(file_path).ok())
+            .as_ref()?;
+        let offset = byte_offset as usize;
+        if offset > source.len() {
+            return None;
+        }
+        #[allow(clippy::cast_possible_truncation)]
+        Some(source[..offset].matches('\n').count() as u32 + 1)
+    }
+
+    fn format_origin(&mut self, throw: &PropagatedThrow) -> String {
+        let path = &throw.origin_function.file_path;
+        match self.line_of(path, throw.origin.location.start) {
+            Some(line) => format!("{}:{line}", path.display()),
+            None => path.display().to_string(),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutputFormat {
@@ -36,7 +69,8 @@ struct JsonDiagnostic {
 struct JsonMissingThrow {
     error_type: String,
     origin_file: String,
-    origin_line: u32,
+    // throw 元ファイルが読めない場合は偽の数値を出さず null にする
+    origin_line: Option<u32>,
 }
 
 #[derive(Serialize)]
@@ -62,23 +96,35 @@ pub fn report(
     files_checked: usize,
     format: OutputFormat,
 ) -> io::Result<()> {
+    let mut stdout = io::stdout().lock();
+    report_to(&mut stdout, diagnostics, lsp_violations, files_checked, format)
+}
+
+fn report_to<W: Write>(
+    writer: &mut W,
+    diagnostics: &[Diagnostic],
+    lsp_violations: &[LspViolation],
+    files_checked: usize,
+    format: OutputFormat,
+) -> io::Result<()> {
     match format {
-        OutputFormat::Text => report_text(diagnostics, lsp_violations, files_checked),
-        OutputFormat::Json => report_json(diagnostics, lsp_violations, files_checked),
+        OutputFormat::Text => report_text(writer, diagnostics, lsp_violations, files_checked),
+        OutputFormat::Json => report_json(writer, diagnostics, lsp_violations, files_checked),
     }
 }
 
-fn report_text(
+fn report_text<W: Write>(
+    stdout: &mut W,
     diagnostics: &[Diagnostic],
     lsp_violations: &[LspViolation],
     files_checked: usize,
 ) -> io::Result<()> {
-    let mut stdout = io::stdout().lock();
-
     if diagnostics.is_empty() && lsp_violations.is_empty() {
         writeln!(stdout, "No issues found in {files_checked} files")?;
         return Ok(());
     }
+
+    let mut resolver = OriginResolver::default();
 
     for diag in diagnostics {
         writeln!(stdout, "error: missing @throws declaration")?;
@@ -87,7 +133,8 @@ fn report_text(
 
         for missing in &diag.missing_throws {
             let type_name = missing.error_type.type_name().unwrap_or("Unknown");
-            writeln!(stdout, "   | {} propagates from {:?}", type_name, missing.origin.location)?;
+            let origin = resolver.format_origin(missing);
+            writeln!(stdout, "   | {type_name} propagates from {origin}")?;
         }
 
         writeln!(stdout, "   |")?;
@@ -155,11 +202,13 @@ fn help_types(missing: &[throw_trace_core::PropagatedThrow]) -> String {
     types.join(", ")
 }
 
-fn report_json(
+fn report_json<W: Write>(
+    writer: &mut W,
     diagnostics: &[Diagnostic],
     lsp_violations: &[LspViolation],
     files_checked: usize,
 ) -> io::Result<()> {
+    let mut resolver = OriginResolver::default();
     let json_diagnostics: Vec<JsonDiagnostic> = diagnostics
         .iter()
         .map(|d| JsonDiagnostic {
@@ -170,8 +219,9 @@ fn report_json(
                 .iter()
                 .map(|m| JsonMissingThrow {
                     error_type: m.error_type.type_name().unwrap_or("Unknown").to_string(),
-                    origin_file: String::new(),
-                    origin_line: m.origin.location.start,
+                    origin_file: m.origin_function.file_path.display().to_string(),
+                    origin_line: resolver
+                        .line_of(&m.origin_function.file_path, m.origin.location.start),
                 })
                 .collect(),
         })
@@ -208,7 +258,7 @@ fn report_json(
     };
 
     let json = serde_json::to_string_pretty(&report)?;
-    println!("{json}");
+    writeln!(writer, "{json}")?;
 
     Ok(())
 }
@@ -242,5 +292,81 @@ mod tests {
         let missing =
             vec![propagated(ErrorType::Named("AppError".into())), propagated(ErrorType::Unknown)];
         assert_eq!(help_types(&missing), "AppError, unknown");
+    }
+
+    fn diagnostic_with_origin(origin_path: PathBuf, throw_offset: u32) -> Diagnostic {
+        let caller =
+            FunctionId::new(PathBuf::from("caller.ts"), "callA", Span { start: 0, end: 50 });
+        let origin_fn = FunctionId::new(origin_path, "a", Span { start: 0, end: 40 });
+        Diagnostic {
+            function: caller,
+            missing_throws: vec![PropagatedThrow {
+                error_type: ErrorType::Named("E1".into()),
+                origin: ThrowSite {
+                    location: Span { start: throw_offset, end: throw_offset + 14 },
+                    error_type: ErrorType::Named("E1".into()),
+                },
+                origin_function: origin_fn,
+                path: vec![],
+            }],
+        }
+    }
+
+    #[test]
+    fn json_report_outputs_origin_file_and_line_number() {
+        let dir = tempfile::tempdir().unwrap();
+        let origin_path = dir.path().join("origin.ts");
+        // "throw" は2行目（バイトオフセット17）
+        std::fs::write(&origin_path, "function a() {\n  throw new E1();\n}\n").unwrap();
+
+        let diag = diagnostic_with_origin(origin_path.clone(), 17);
+        let mut buf = Vec::new();
+        report_to(&mut buf, &[diag], &[], 1, OutputFormat::Json).unwrap();
+
+        let parsed: serde_json::Value = serde_json::from_slice(&buf).unwrap();
+        let missing = &parsed["diagnostics"][0]["missing_throws"][0];
+        assert_eq!(
+            missing["origin_file"].as_str().unwrap(),
+            origin_path.display().to_string(),
+            "origin_file must contain the origin function's file path"
+        );
+        assert_eq!(
+            missing["origin_line"].as_u64().unwrap(),
+            2,
+            "origin_line must be a 1-based line number, not a byte offset"
+        );
+    }
+
+    #[test]
+    fn json_report_origin_line_is_null_when_file_unreadable() {
+        let diag = diagnostic_with_origin(PathBuf::from("/nonexistent/origin.ts"), 17);
+        let mut buf = Vec::new();
+        report_to(&mut buf, &[diag], &[], 1, OutputFormat::Json).unwrap();
+
+        let parsed: serde_json::Value = serde_json::from_slice(&buf).unwrap();
+        let missing = &parsed["diagnostics"][0]["missing_throws"][0];
+        assert!(
+            missing["origin_line"].is_null(),
+            "unknown line must be null, not a fake number: {missing}"
+        );
+    }
+
+    #[test]
+    fn text_report_shows_origin_location_not_span_debug() {
+        let dir = tempfile::tempdir().unwrap();
+        let origin_path = dir.path().join("origin.ts");
+        std::fs::write(&origin_path, "function a() {\n  throw new E1();\n}\n").unwrap();
+
+        let diag = diagnostic_with_origin(origin_path.clone(), 17);
+        let mut buf = Vec::new();
+        report_to(&mut buf, &[diag], &[], 1, OutputFormat::Text).unwrap();
+
+        let output = String::from_utf8(buf).unwrap();
+        assert!(!output.contains("Span {"), "internal Span debug must not leak: {output}");
+        let expected = format!("{}:2", origin_path.display());
+        assert!(
+            output.contains(&expected),
+            "text output must show origin as file:line ({expected}): {output}"
+        );
     }
 }
