@@ -127,6 +127,19 @@ pub struct FunctionSignature {
     pub try_catch_blocks: Vec<TryCatchBlock>,
     pub is_async: bool,
     pub class_name: Option<CompactString>,
+    /// この関数が宣言する型パラメータ（名前と constraint のテキスト）。
+    /// 型パラメータ値の throw を quickinfo から解決した際に、
+    /// 生の型パラメータ名/constraint 文字列を実際の型として誤認しないよう
+    /// 判別するために使う。
+    pub type_params: Vec<TypeParam>,
+}
+
+/// 関数に宣言された型パラメータ。`constraint` は `extends` 句のテキスト
+/// （例: `<E extends BaseError>` の `BaseError`）で、なければ `None`。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TypeParam {
+    pub name: CompactString,
+    pub constraint: Option<CompactString>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

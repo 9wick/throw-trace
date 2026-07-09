@@ -1,6 +1,6 @@
 use crate::{
     compute_propagated_throws, CallGraph, Diagnostic, ErrorType, FunctionId, FunctionSignature,
-    LspViolation, MethodSignature, PropagatedThrow, TypeRelation, TypeResolver,
+    LspViolation, MethodSignature, PropagatedThrow, TypeParam, TypeRelation, TypeResolver,
 };
 use std::collections::HashMap;
 
@@ -13,7 +13,7 @@ pub fn generate_diagnostics_with_resolver<S: std::hash::BuildHasher, R: TypeReso
 
     for (func_id, sig) in signatures {
         let propagated = compute_propagated_throws(func_id, signatures, graph);
-        let missing = find_missing_declarations(sig, &propagated, resolver);
+        let missing = find_missing_declarations(sig, &propagated, signatures, resolver);
 
         if !missing.is_empty() {
             diagnostics.push(Diagnostic { function: func_id.clone(), missing_throws: missing });
@@ -23,9 +23,10 @@ pub fn generate_diagnostics_with_resolver<S: std::hash::BuildHasher, R: TypeReso
     diagnostics
 }
 
-pub fn find_missing_declarations<R: TypeResolver>(
+pub fn find_missing_declarations<R: TypeResolver, S: std::hash::BuildHasher>(
     sig: &FunctionSignature,
     propagated: &[PropagatedThrow],
+    signatures: &HashMap<FunctionId, FunctionSignature, S>,
     resolver: &mut R,
 ) -> Vec<PropagatedThrow> {
     let declared_types: Vec<&str> =
@@ -34,11 +35,19 @@ pub fn find_missing_declarations<R: TypeResolver>(
     propagated
         .iter()
         .filter_map(|p| {
+            // 型パラメータの constraint 置換は throw が実際に書かれた関数
+            // (origin_function) のスコープに基づく必要がある。伝播元 (sig) の
+            // 型パラメータではなく、origin_function の型パラメータを参照する。
+            let origin_type_params: &[TypeParam] = signatures
+                .get(&p.origin_function)
+                .map_or(&[], |origin_sig| origin_sig.type_params.as_slice());
+
             let (is_decl, resolved_type) = is_declared_with_resolution(
                 &p.error_type,
                 p.origin.location,
                 &p.origin_function.file_path,
                 &declared_types,
+                origin_type_params,
                 resolver,
             );
             if is_decl {
@@ -59,6 +68,7 @@ fn is_declared_with_resolution<R: TypeResolver>(
     throw_span: crate::Span,
     file_path: &std::path::Path,
     declared_types: &[&str],
+    origin_type_params: &[TypeParam],
     type_resolver: &mut R,
 ) -> (bool, Option<String>) {
     match error_type {
@@ -69,18 +79,67 @@ fn is_declared_with_resolution<R: TypeResolver>(
             (is_decl, None)
         }
         ErrorType::Unknown => {
-            if let Some(resolved_type) = type_resolver.resolve_type(file_path, throw_span) {
-                let is_decl = declared_types.iter().any(|declared| {
-                    type_resolver.is_assignable_to(file_path, &resolved_type, declared)
-                });
-                (is_decl, Some(resolved_type))
-            } else {
+            let Some(resolved_type) = type_resolver.resolve_type(file_path, throw_span) else {
                 let is_decl = declared_types.iter().any(|declared| *declared == "unknown");
-                (is_decl, None)
+                return (is_decl, None);
+            };
+
+            match type_param_constraint(&resolved_type, origin_type_params) {
+                // 制約付き型パラメータ (`E extends C`): C への throw として扱う
+                TypeParamMatch::Constrained(constraint) => {
+                    let is_decl = declared_types.iter().any(|declared| {
+                        type_resolver.is_assignable_to(file_path, constraint, declared)
+                    });
+                    (is_decl, Some(constraint.to_string()))
+                }
+                // 制約なし型パラメータ (`E`): 暗黙の制約 unknown として扱う
+                TypeParamMatch::Unconstrained => {
+                    let is_decl = declared_types.iter().any(|declared| *declared == "unknown");
+                    (is_decl, None)
+                }
+                // 型パラメータ由来ではない通常の型解決結果
+                TypeParamMatch::NotATypeParam => {
+                    let is_decl = declared_types.iter().any(|declared| {
+                        type_resolver.is_assignable_to(file_path, &resolved_type, declared)
+                    });
+                    (is_decl, Some(resolved_type))
+                }
             }
         }
         ErrorType::Rethrow(_) => (false, None),
     }
+}
+
+enum TypeParamMatch<'a> {
+    /// 型パラメータ名ではない通常の型解決結果
+    NotATypeParam,
+    /// 制約なし型パラメータ (`E`)
+    Unconstrained,
+    /// 制約付き型パラメータ (`E extends C`)。値は constraint (`C`) のテキスト
+    Constrained(&'a str),
+}
+
+// resolve_type が返す quickinfo 由来の生テキストが、throw 元関数自身が宣言した
+// 型パラメータ名 (`E`) または `E extends C` の形と一致するかを判定する。
+fn type_param_constraint<'a>(
+    resolved_type: &str,
+    type_params: &'a [TypeParam],
+) -> TypeParamMatch<'a> {
+    for tp in type_params {
+        let name = tp.name.as_str();
+        let matches = resolved_type == name
+            || resolved_type
+                .strip_prefix(name)
+                .is_some_and(|rest| rest.trim_start().starts_with("extends"));
+        if !matches {
+            continue;
+        }
+        return match tp.constraint.as_deref() {
+            Some(constraint) => TypeParamMatch::Constrained(constraint),
+            None => TypeParamMatch::Unconstrained,
+        };
+    }
+    TypeParamMatch::NotATypeParam
 }
 
 pub fn generate_lsp_violations<S: std::hash::BuildHasher, R: TypeResolver>(

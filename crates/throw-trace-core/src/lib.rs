@@ -13,7 +13,7 @@ pub use propagation::compute_propagated_throws;
 pub use types::{
     CallSite, DeclaredThrow, Diagnostic, ErrorType, FunctionId, FunctionSignature, LspViolation,
     MethodSignature, NoOpTypeResolver, PropagatedThrow, RelationKind, Span, ThrowSite,
-    TryCatchBlock, TypeId, TypeRelation, TypeResolver,
+    TryCatchBlock, TypeId, TypeParam, TypeRelation, TypeResolver,
 };
 
 #[cfg(test)]
@@ -107,6 +107,7 @@ mod tests {
             try_catch_blocks: vec![],
             is_async: false,
             class_name: None,
+            type_params: vec![],
         };
         assert_eq!(sig.id.name.as_str(), "testFn");
         assert!(!sig.is_async);
@@ -207,6 +208,7 @@ mod tests {
             try_catch_blocks: vec![],
             is_async: false,
             class_name: None,
+            type_params: vec![],
         };
         signatures.insert(id.clone(), sig);
 
@@ -235,6 +237,7 @@ mod tests {
                 try_catch_blocks: vec![],
                 is_async: false,
                 class_name: None,
+                type_params: vec![],
             },
         );
 
@@ -268,6 +271,7 @@ mod tests {
                 try_catch_blocks: vec![],
                 is_async: false,
                 class_name: None,
+                type_params: vec![],
             },
         );
 
@@ -299,6 +303,7 @@ mod tests {
                 try_catch_blocks: vec![],
                 is_async: false,
                 class_name: None,
+                type_params: vec![],
             },
         );
 
@@ -317,6 +322,7 @@ mod tests {
                 try_catch_blocks: vec![],
                 is_async: false,
                 class_name: None,
+                type_params: vec![],
             },
         );
 
@@ -363,6 +369,7 @@ mod tests {
                 }],
                 is_async: false,
                 class_name: None,
+                type_params: vec![],
             },
         );
 
@@ -404,6 +411,7 @@ mod tests {
                 }],
                 is_async: false,
                 class_name: None,
+                type_params: vec![],
             },
         );
 
@@ -435,6 +443,7 @@ mod tests {
                 try_catch_blocks: vec![],
                 is_async: false,
                 class_name: Some("DatabaseUserRepository".into()),
+                type_params: vec![],
             },
         );
 
@@ -507,6 +516,7 @@ mod tests {
                 try_catch_blocks: vec![],
                 is_async: false,
                 class_name: Some("ImplementationA".into()),
+                type_params: vec![],
             },
         );
 
@@ -576,6 +586,7 @@ mod tests {
                 try_catch_blocks: vec![],
                 is_async: false,
                 class_name: Some("DatabaseUserRepository".into()),
+                type_params: vec![],
             },
         );
 
@@ -660,6 +671,7 @@ mod tests {
             try_catch_blocks: vec![],
             is_async: false,
             class_name: None,
+            type_params: vec![],
         };
 
         let propagated = vec![PropagatedThrow {
@@ -672,7 +684,9 @@ mod tests {
             path: vec![caller_fn],
         }];
 
-        let missing = find_missing_declarations(&sig, &propagated, &mut OriginFileResolver);
+        let signatures: HashMap<FunctionId, FunctionSignature> = HashMap::new();
+        let missing =
+            find_missing_declarations(&sig, &propagated, &signatures, &mut OriginFileResolver);
         assert!(
             missing.is_empty(),
             "declared @throws {{Error}} should satisfy Unknown resolved as Error at origin file, got: {:?}",
@@ -709,6 +723,7 @@ mod tests {
                 }],
                 is_async: false,
                 class_name: None,
+                type_params: vec![],
             },
         );
 
@@ -751,6 +766,7 @@ mod tests {
                 }],
                 is_async: false,
                 class_name: None,
+                type_params: vec![],
             },
         );
 
@@ -791,6 +807,7 @@ mod tests {
                 }],
                 is_async: false,
                 class_name: None,
+                type_params: vec![],
             },
         );
 
@@ -828,6 +845,7 @@ mod tests {
                 try_catch_blocks: vec![],
                 is_async: false,
                 class_name: None,
+                type_params: vec![],
             },
         );
 
@@ -857,6 +875,7 @@ mod tests {
                 }],
                 is_async: false,
                 class_name: None,
+                type_params: vec![],
             },
         );
 
@@ -904,6 +923,7 @@ mod tests {
                 try_catch_blocks: vec![],
                 is_async: false,
                 class_name: None,
+                type_params: vec![],
             },
         );
 
@@ -923,6 +943,7 @@ mod tests {
                     try_catch_blocks: vec![],
                     is_async: false,
                     class_name: None,
+                    type_params: vec![],
                 },
             );
         }
@@ -954,6 +975,7 @@ mod tests {
                 }],
                 is_async: false,
                 class_name: None,
+                type_params: vec![],
             },
         );
 
@@ -1011,6 +1033,7 @@ mod tests {
                 try_catch_blocks: vec![],
                 is_async: false,
                 class_name: None,
+                type_params: vec![],
             },
         );
 
@@ -1025,6 +1048,7 @@ mod tests {
                 try_catch_blocks: vec![],
                 is_async: false,
                 class_name: None,
+                type_params: vec![],
             },
         );
 
@@ -1055,6 +1079,7 @@ mod tests {
                 }],
                 is_async: false,
                 class_name: None,
+                type_params: vec![],
             },
         );
 
