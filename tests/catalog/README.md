@@ -2494,6 +2494,7 @@ decorator 適用時の throw パターン（class / method / field decorator）
 //
 // decorator は class 定義時（モジュール評価時、または定義を囲む関数の実行時）に
 // 実行される。constructor / method の呼び出し時ではない。
+// decorator 内の呼び出しは class 定義を囲むスコープに帰属される。
 
 class DecoratorError extends Error {}
 
@@ -2562,43 +2563,42 @@ function callsDecoratedMethod(svc: WithMethodDecorator) {
   return svc.greet();
 }
 
-// --- method decorator factory 呼び出し ---
-// [FALSE POSITIVE] methodTag("m") は class 定義時に実行されるが、
-// decorator が MethodDefinition ノードに属し method の関数スコープ内で
-// 走査されるため、method 呼び出し時の throw として誤帰属される。
-// さらに member call 伝播で呼び出し側にも連鎖する。
-// 期待: run() にも caller にも @throws 不要。
-// [KNOWN BUG] fix は JSDoc を decorator と method 名の間に挿入するが、
-// その位置の JSDoc は宣言として認識されず fix が冪等にならない
-// （実行のたびに @throws 行が重複追記される）。
-// ここでは認識される位置（decorator の前）に配置している。
+// --- method decorator factory 呼び出し（トップレベル class）---
+// methodTag("m") は class 定義時＝モジュール評価時に実行されるため、
+// method の throw として帰属されない。run() にも呼び出し側にも @throws 不要。
 
 class WithMethodFactory {
-  /**
-   * @throws {DecoratorError} from 44_decorator.ts:methodTag
-   */
   @methodTag("m")
   run() {
     return 1;
   }
 }
 
-/**
- * @throws {DecoratorError} from 44_decorator.ts:methodTag
- */
 function callsFactoryDecoratedMethod(svc: WithMethodFactory) {
   return svc.run();
 }
 
+// --- decorated method 自体が throw する場合 ---
+// method 本体の throw は通常どおり要求される。
+// JSDoc は decorator の前に置く（fix もこの位置に挿入する）。
+
+class DecoratedThrower {
+  /** @throws {DecoratorError} */
+  @methodTag("t")
+  boom() {
+    throw new DecoratorError();
+  }
+}
+
 // --- field decorator factory 呼び出し ---
-// field 初期化子は関数スコープ外のため追跡されない（method factory と非一貫）。
+// field の decorator も class 定義時実行のため、トップレベルでは帰属先なし。
 
 class WithFieldFactory {
   @fieldTag("f")
   field = 1;
 }
 
-// --- 関数内での decorator 適用 ---
+// --- 関数内での decorator 適用（class decorator）---
 // class 定義が関数内にある場合、decorator は関数の実行時に走るため、
 // 囲む関数への帰属は正当（この関数を呼ぶと decorator の throw が飛びうる）。
 
@@ -2611,10 +2611,26 @@ function createFallbackClass() {
   return Fallback;
 }
 
+// --- 関数内での decorator 適用（method decorator factory）---
+// method decorator も class 定義時に実行されるため、method ではなく
+// 囲む関数に帰属される。
+
+/**
+ * @throws {DecoratorError} from 44_decorator.ts:methodTag
+ */
+function definesDecoratedClass() {
+  class Inner {
+    @methodTag("inner")
+    innerRun() {
+      return 1;
+    }
+  }
+  return Inner;
+}
+
 // --- 参考: legacy parameter decorator（experimentalDecorators）---
-// NestJS 等の constructor(@Inject("x") dep) 形式では、decorator factory の
-// 呼び出しが constructor のパラメータリスト内で走査されるため、method factory
-// と同様に constructor へ誤帰属される [FALSE POSITIVE]。
+// NestJS 等の constructor(@Inject("x") dep) 形式のパラメータ decorator も
+// method / constructor のスコープ外（class 定義を囲むスコープ）に帰属される。
 // TC39 decorator ではパラメータ decorator が存在せず型エラーになるため、
 // このカタログには含めない。
 ```
