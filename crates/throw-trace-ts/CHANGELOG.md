@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.8](https://github.com/9wick/throw-trace/compare/throw-trace-ts-v0.1.7...throw-trace-ts-v0.1.8) - 2026-07-09
+
+### Added
+
+- add persistent cache
+
+### Fixed
+
+- resolve type parameter throws against declared constraint
+- tighten instanceof catch detection and support switch termination
+
+### Other
+
+- Merge pull request #22 from 9wick/fix-review-findings
+
 ## [0.1.7](https://github.com/9wick/throw-trace/compare/throw-trace-ts-v0.1.6...throw-trace-ts-v0.1.7) - 2026-05-31
 
 ### Fixed
