@@ -297,6 +297,46 @@ fn same_name_member_call_no_false_positive() {
 }
 
 // =============================================================
+// text 出力の複数行伝播トレース（throw at / ← ホップ）
+// =============================================================
+
+#[test]
+fn check_reports_full_propagation_trace_with_line_numbers() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let test_file = temp_dir.path().join("chain.ts");
+
+    std::fs::write(
+        &test_file,
+        r#"function createTestTarget() {
+  parseConfig();
+}
+
+function parseConfig() {
+  validateInput();
+}
+
+function validateInput() {
+  throw new ValidationError("bad");
+}
+
+class ValidationError extends Error {}
+"#,
+    )
+    .unwrap();
+
+    let file_display = test_file.display();
+
+    let mut cmd = Command::cargo_bin("throw-trace").unwrap();
+    cmd.args(["check", test_file.to_str().unwrap()])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("ValidationError propagates through:"))
+        .stdout(predicate::str::contains(format!("throw at {file_display}:10 in validateInput")))
+        .stdout(predicate::str::contains(format!("\u{2190} parseConfig ({file_display}:5)")))
+        .stdout(predicate::str::contains(format!("\u{2190} createTestTarget ({file_display}:1)")));
+}
+
+// =============================================================
 // fix テスト
 // =============================================================
 
