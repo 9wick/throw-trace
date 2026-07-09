@@ -1,6 +1,5 @@
 /target
 .throw-trace/
-Cargo.lock
 *.swp
 *.swo
 .DS_Store
