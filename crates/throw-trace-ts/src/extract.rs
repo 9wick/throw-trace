@@ -2,17 +2,17 @@ use compact_str::CompactString;
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
     BindingPatternKind, CallExpression, Class, Expression, Function, MethodDefinition, Statement,
-    TSInterfaceDeclaration, TSType, ThrowStatement, TryStatement,
+    TSInterfaceDeclaration, TSType, TSTypeParameterDeclaration, ThrowStatement, TryStatement,
 };
 use oxc_ast_visit::{walk, Visit};
 use oxc_parser::Parser;
-use oxc_span::SourceType;
+use oxc_span::{GetSpan, SourceType};
 use oxc_syntax::scope::ScopeFlags;
 use std::collections::HashMap;
 use std::path::Path;
 use throw_trace_core::{
     CallSite, DeclaredThrow, ErrorType, FunctionId, FunctionSignature, MethodSignature,
-    RelationKind, Span, ThrowSite, TryCatchBlock, TypeId, TypeRelation,
+    RelationKind, Span, ThrowSite, TryCatchBlock, TypeId, TypeParam, TypeRelation,
 };
 
 use crate::jsdoc::extract_throws_from_jsdoc;
@@ -64,6 +64,7 @@ impl<'a> FunctionExtractor<'a> {
         func_span: oxc_span::Span,
         is_async: bool,
         preceding_comment: Option<&str>,
+        type_parameters: Option<&TSTypeParameterDeclaration<'_>>,
     ) -> usize {
         let id = FunctionId::new(
             self.file_path.to_path_buf(),
@@ -75,6 +76,7 @@ impl<'a> FunctionExtractor<'a> {
             preceding_comment.map(|c| parse_declared_throws(c, func_span)).unwrap_or_default();
 
         let class_name = self.current_class.as_ref().map(|c| c.name.clone());
+        let type_params = extract_type_params(self.source, type_parameters);
 
         let idx = self.signatures.len();
         self.signatures.push(FunctionSignature {
@@ -86,6 +88,7 @@ impl<'a> FunctionExtractor<'a> {
             try_catch_blocks: Vec::new(),
             is_async,
             class_name,
+            type_params,
         });
         self.scope_stack.push(idx);
         idx
@@ -303,6 +306,29 @@ fn extract_callee_info(expr: &Expression<'_>) -> (Option<CompactString>, Option<
         }
         _ => (None, None),
     }
+}
+
+// 関数の型パラメータ宣言 (`<E extends BaseError>`) から名前と constraint の
+// テキストを抽出する。constraint は union 等でも壊れないよう、AST を再解釈
+// せずソースを span でそのまま切り出す（tsserver の quickinfo 表示と対応させるため）。
+fn extract_type_params(
+    source: &str,
+    type_parameters: Option<&TSTypeParameterDeclaration<'_>>,
+) -> Vec<TypeParam> {
+    let Some(decl) = type_parameters else {
+        return Vec::new();
+    };
+
+    decl.params
+        .iter()
+        .map(|param| {
+            let constraint = param.constraint.as_ref().map(|c| {
+                let span = c.span();
+                source[span.start as usize..span.end as usize].trim().to_string().into()
+            });
+            TypeParam { name: param.name.name.as_str().into(), constraint }
+        })
+        .collect()
 }
 
 fn extract_type_names(ts_type: &TSType<'_>) -> Vec<String> {
@@ -530,6 +556,7 @@ impl<'a> Visit<'a> for FunctionExtractor<'a> {
                 func.span,
                 func.r#async,
                 comment.as_deref(),
+                func.type_parameters.as_deref(),
             );
             walk::walk_function(self, func, flags);
             self.end_function();
@@ -552,6 +579,7 @@ impl<'a> Visit<'a> for FunctionExtractor<'a> {
                                 arrow.span,
                                 arrow.r#async,
                                 comment.as_deref(),
+                                arrow.type_parameters.as_deref(),
                             );
                             walk::walk_arrow_function_expression(self, arrow);
                             self.end_function();
@@ -572,6 +600,7 @@ impl<'a> Visit<'a> for FunctionExtractor<'a> {
                         func.span,
                         func.r#async,
                         comment.as_deref(),
+                        func.type_parameters.as_deref(),
                     );
                     walk::walk_function(self, func, ScopeFlags::empty());
                     self.end_function();
@@ -603,6 +632,7 @@ impl<'a> Visit<'a> for FunctionExtractor<'a> {
                         arrow.span,
                         arrow.r#async,
                         comment.as_deref(),
+                        arrow.type_parameters.as_deref(),
                     );
                     walk::walk_arrow_function_expression(self, arrow);
                     self.end_function();
@@ -693,6 +723,7 @@ impl<'a> Visit<'a> for FunctionExtractor<'a> {
             method.value.span,
             is_async,
             comment.as_deref(),
+            method.value.type_parameters.as_deref(),
         );
         walk::walk_method_definition(self, method);
         self.end_function();

@@ -302,7 +302,8 @@ impl Analyzer {
 
                 let propagated = compute_propagated_throws(&func_id, &self.signatures, &self.graph);
                 resolver.take_recorded();
-                let missing = find_missing_declarations(sig, &propagated, &mut resolver);
+                let missing =
+                    find_missing_declarations(sig, &propagated, &self.signatures, &mut resolver);
                 let type_check_dependencies = resolver.take_recorded();
                 let diagnostic = if missing.is_empty() {
                     None
@@ -343,7 +344,8 @@ impl Analyzer {
                 }
 
                 let propagated = compute_propagated_throws(&func_id, &self.signatures, &self.graph);
-                let missing = find_missing_declarations(sig, &propagated, &mut resolver);
+                let missing =
+                    find_missing_declarations(sig, &propagated, &self.signatures, &mut resolver);
                 let diagnostic = if missing.is_empty() {
                     None
                 } else {
