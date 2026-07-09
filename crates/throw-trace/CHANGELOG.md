@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.8](https://github.com/9wick/throw-trace/compare/v0.1.7...v0.1.8) - 2026-07-09
+
+### Added
+
+- add persistent cache
+
+### Fixed
+
+- resolve type parameter throws against declared constraint
+- suggest declarable unknown type in help, document unknown handling
+- scope diagnostics cache invalidation to actual dependencies
+- preserve file format in fix command and separate CLI exit codes
+
+### Other
+
+- apply cargo fmt
+- catalog closure attribution as false positive, add cross-file rethrow coverage
+- Merge pull request #22 from 9wick/fix-review-findings
+- document fix command and exit codes in README
+
 ## [0.1.7](https://github.com/9wick/throw-trace/compare/v0.1.6...v0.1.7) - 2026-05-31
 
 ### Fixed

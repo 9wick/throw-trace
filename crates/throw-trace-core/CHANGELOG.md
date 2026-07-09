@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.8](https://github.com/9wick/throw-trace/compare/throw-trace-core-v0.1.7...throw-trace-core-v0.1.8) - 2026-07-09
+
+### Added
+
+- add persistent cache
+
+### Fixed
+
+- resolve type parameter throws against declared constraint
+- resolve cross-file Unknown throws against origin file
+- collect throws from shared transitive callees
+
+### Other
+
+- apply cargo fmt
+- Merge pull request #22 from 9wick/fix-review-findings
+
 ## [0.1.7](https://github.com/9wick/throw-trace/compare/throw-trace-core-v0.1.6...throw-trace-core-v0.1.7) - 2026-05-31
 
 ### Fixed
