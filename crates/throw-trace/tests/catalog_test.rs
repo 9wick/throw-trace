@@ -6,7 +6,7 @@ fn workspace_root() -> &'static Path {
 }
 
 #[test]
-fn catalog_fix_is_idempotent() {
+fn legacy_catalog_has_no_missing_throws() {
     let catalog_dir = workspace_root().join("tests/catalog");
     let entries: Vec<_> = std::fs::read_dir(&catalog_dir)
         .unwrap_or_else(|e| panic!("cannot read {}: {e}", catalog_dir.display()))
@@ -16,38 +16,94 @@ fn catalog_fix_is_idempotent() {
 
     assert!(!entries.is_empty(), "no .ts files found in tests/catalog/");
 
-    let temp_dir = tempfile::tempdir().unwrap();
     let mut failures = Vec::new();
 
     for entry in &entries {
         let src = entry.path();
         let file_name = src.file_name().unwrap();
-        let tmp = temp_dir.path().join(file_name);
-        std::fs::copy(&src, &tmp).unwrap();
-
-        Command::cargo_bin("throw-trace")
+        let assertion = Command::cargo_bin("throw-trace")
             .unwrap()
             .current_dir(workspace_root())
-            .args(["fix", tmp.to_str().unwrap()])
+            .args(["check", src.to_str().unwrap()])
             .assert()
-            .success();
+            .try_success();
 
-        let original = std::fs::read_to_string(&src).unwrap();
-        let fixed = std::fs::read_to_string(&tmp).unwrap();
-
-        if original != fixed {
-            let diff = diff_strings(&original, &fixed);
+        if let Err(error) = assertion {
             let name = file_name.to_string_lossy();
-            failures.push(format!("--- {name} ---\n{diff}"));
+            failures.push(format!("--- {name} ---\n{error}"));
         }
     }
 
     assert!(
         failures.is_empty(),
-        "catalog idempotency check failed for {} file(s):\n\n{}",
+        "legacy catalog check failed for {} file(s):\n\n{}",
         failures.len(),
         failures.join("\n\n")
     );
+}
+
+#[test]
+fn sync_catalog_matches_expected_and_is_idempotent() {
+    let cases_dir = workspace_root().join("tests/catalog/cases");
+    let entries: Vec<_> = std::fs::read_dir(&cases_dir)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", cases_dir.display()))
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().is_dir())
+        .collect();
+
+    assert!(!entries.is_empty(), "no sync cases found in {}", cases_dir.display());
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let mut failures = Vec::new();
+
+    for entry in entries {
+        let case_name = entry.file_name();
+        let before = entry.path().join("before.ts");
+        let expected = entry.path().join("expected.ts");
+        let temp_case_dir = temp_dir.path().join(&case_name);
+        std::fs::create_dir_all(&temp_case_dir).unwrap();
+        let actual = temp_case_dir.join("before.ts");
+        std::fs::copy(&before, &actual).unwrap();
+
+        run_fix(&actual);
+
+        let expected_source = std::fs::read_to_string(&expected).unwrap();
+        let first_fixed = std::fs::read_to_string(&actual).unwrap();
+        if expected_source != first_fixed {
+            failures.push(format!(
+                "--- {} (expected) ---\n{}",
+                case_name.to_string_lossy(),
+                diff_strings(&expected_source, &first_fixed)
+            ));
+            continue;
+        }
+
+        run_fix(&actual);
+        let second_fixed = std::fs::read_to_string(&actual).unwrap();
+        if first_fixed != second_fixed {
+            failures.push(format!(
+                "--- {} (idempotency) ---\n{}",
+                case_name.to_string_lossy(),
+                diff_strings(&first_fixed, &second_fixed)
+            ));
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "sync catalog failed for {} case(s):\n\n{}",
+        failures.len(),
+        failures.join("\n\n")
+    );
+}
+
+fn run_fix(path: &Path) {
+    Command::cargo_bin("throw-trace")
+        .unwrap()
+        .current_dir(workspace_root())
+        .args(["fix", path.to_str().unwrap()])
+        .assert()
+        .success();
 }
 
 fn diff_strings(original: &str, modified: &str) -> String {

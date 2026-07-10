@@ -13,8 +13,9 @@ README="$SCRIPT_DIR/README.md"
 > Run `bash tests/catalog/generate_readme.sh` to regenerate.
 
 throw-trace が対応すべきパターンを網羅したカタログテスト集。
-各ファイルは「期待される `@throws` アノテーション付きの TypeScript コード」そのものであり、
-ツールの出力と diff を取ることで正しさを検証する。
+`cases/` 配下は同期前の `before.ts` に `fix` を適用し、`expected.ts` との完全一致と
+2回目の `fix` が不変であることを検証する。直下の `.ts` は従来カタログとして、
+宣言漏れがないことを継続確認する。
 
 ## Summary
 
@@ -28,6 +29,20 @@ HEADER
     description=$(head -1 "$f" | sed 's|^// *||')
     anchor=$(echo "$basename" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_-]//g')
     printf "| %s | [%s](#%s) | %s |\n" "$num" "$basename" "$anchor" "$description"
+  done
+
+  echo ""
+  echo "## Sync Golden Cases"
+  echo ""
+  echo "| Case | Status | Description |"
+  echo "|------|--------|-------------|"
+
+  for case_dir in "$SCRIPT_DIR"/cases/*; do
+    [ -d "$case_dir" ] || continue
+    case_name=$(basename "$case_dir")
+    description=$(sed -n 's/^description = "\(.*\)"$/\1/p' "$case_dir/case.toml")
+    status=$(sed -n 's/^status = "\(.*\)"$/\1/p' "$case_dir/case.toml")
+    printf "| [%s](#sync-%s) | %s | %s |\n" "$case_name" "$case_name" "$status" "$description"
   done
 
   echo ""
@@ -46,6 +61,34 @@ HEADER
     echo ""
     echo '```typescript'
     cat "$f"
+    echo '```'
+    echo ""
+  done
+
+  echo "---"
+  echo ""
+  echo "## Sync Golden Case Details"
+  echo ""
+
+  for case_dir in "$SCRIPT_DIR"/cases/*; do
+    [ -d "$case_dir" ] || continue
+    case_name=$(basename "$case_dir")
+    description=$(sed -n 's/^description = "\(.*\)"$/\1/p' "$case_dir/case.toml")
+
+    echo "### Sync ${case_name}"
+    echo ""
+    echo "$description"
+    echo ""
+    echo "#### Before"
+    echo ""
+    echo '```typescript'
+    cat "$case_dir/before.ts"
+    echo '```'
+    echo ""
+    echo "#### Expected"
+    echo ""
+    echo '```typescript'
+    cat "$case_dir/expected.ts"
     echo '```'
     echo ""
   done

@@ -40,10 +40,11 @@ throw-trace check src/ --exclude "**/*.test.ts"
 throw-trace check src/ --format json
 ```
 
-### 自動修正（fix）
+### 同期（fix）
 
-検出した`@throws`宣言の漏れを、JSDocコメントとして自動挿入します。
-既存のJSDocがある場合は`@throws`行を追記し、ない場合は新しくJSDocブロックを作成します。
+解析したthrow契約に合わせて、`@throws`宣言を同期します。
+不足する宣言を追加し、型だけ、または`from`句付きの機械管理可能な宣言がstaleなら削除します。
+説明文付きの手書き宣言は、解析対象外のthrow情報を失わないよう保持します。
 
 ```bash
 # カレントディレクトリを修正
@@ -200,4 +201,3 @@ Found 3 errors in 2 files
 ## ライセンス
 
 MIT License - see [LICENSE](LICENSE) for details
-
