@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.9](https://github.com/9wick/throw-trace/compare/v0.1.8...v0.1.9) - 2026-07-10
+
+### Added
+
+- synchronize generated throws catalog
+- render propagation trace with source locations in diagnostics
+
+### Other
+
+- migrate core throw catalog cases
+- Merge remote-tracking branch 'origin/main' into feat/sync-throw-catalog
+- Merge pull request #27 from 9wick/improve-error-reporting
+
 ### Changed
 
 - make `fix` synchronize generated `@throws` declarations by adding missing entries and removing stale entries
