@@ -7,7 +7,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use throw_trace_core::{
     compute_propagated_throws, find_missing_declarations, generate_lsp_violations, CallGraph,
-    Diagnostic, FunctionId, FunctionSignature, LspViolation, MethodSignature, Span, TypeRelation,
+    Diagnostic, FunctionId, FunctionSignature, LspViolation, MethodSignature, PropagatedThrow,
+    Span, TypeRelation, TypeResolver,
 };
 use throw_trace_ts::{byte_offset_to_line_col, extract_all, TsServer, TsServerTypeResolver};
 
@@ -34,6 +35,11 @@ pub struct Analyzer {
     /// Maps `(caller_file, callee_span)` -> `(def_file, def_line)` for resolved definitions
     resolved_calls: HashMap<(PathBuf, Span), (PathBuf, u32)>,
     cache: CacheStore,
+}
+
+pub struct ThrowContract {
+    pub function: FunctionId,
+    pub required_throws: Vec<PropagatedThrow>,
 }
 
 impl Analyzer {
@@ -369,6 +375,46 @@ impl Analyzer {
         all_diagnostics
             .into_iter()
             .filter(|d| self.entry_files.contains(&d.function.file_path))
+            .collect()
+    }
+
+    pub fn generate_throw_contracts(&mut self) -> Vec<ThrowContract> {
+        let function_ids = self.sorted_function_ids();
+
+        let contracts = if let Ok(mut resolver) = TsServerTypeResolver::new() {
+            self.throw_contracts_with_resolver(&function_ids, &mut resolver)
+        } else {
+            eprintln!("warning: tsserver not available, falling back to string comparison");
+            let mut resolver = throw_trace_core::NoOpTypeResolver;
+            self.throw_contracts_with_resolver(&function_ids, &mut resolver)
+        };
+
+        contracts
+            .into_iter()
+            .filter(|contract| self.entry_files.contains(&contract.function.file_path))
+            .collect()
+    }
+
+    fn throw_contracts_with_resolver<R: TypeResolver>(
+        &self,
+        function_ids: &[FunctionId],
+        resolver: &mut R,
+    ) -> Vec<ThrowContract> {
+        function_ids
+            .iter()
+            .filter_map(|func_id| {
+                let sig = self.signatures.get(func_id)?;
+                let propagated = compute_propagated_throws(func_id, &self.signatures, &self.graph);
+                let mut undeclared_sig = sig.clone();
+                undeclared_sig.declared_throws.clear();
+                let required_throws = find_missing_declarations(
+                    &undeclared_sig,
+                    &propagated,
+                    &self.signatures,
+                    resolver,
+                );
+                Some(ThrowContract { function: func_id.clone(), required_throws })
+            })
             .collect()
     }
 

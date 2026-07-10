@@ -1,11 +1,12 @@
+use crate::analyzer::ThrowContract;
 use anyhow::Result;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
-use throw_trace_core::{Diagnostic, ErrorType, FunctionId, PropagatedThrow};
+use throw_trace_core::{ErrorType, FunctionId, PropagatedThrow};
 
-pub fn fix_files(diagnostics: &[Diagnostic]) -> Result<usize> {
-    let grouped = group_by_file(diagnostics);
+pub fn fix_files(contracts: &[ThrowContract]) -> Result<usize> {
+    let grouped = group_by_file(contracts);
     let mut fixed_count = 0;
 
     for (file_path, diags) in grouped {
@@ -17,20 +18,20 @@ pub fn fix_files(diagnostics: &[Diagnostic]) -> Result<usize> {
     Ok(fixed_count)
 }
 
-fn group_by_file(diagnostics: &[Diagnostic]) -> HashMap<PathBuf, Vec<&Diagnostic>> {
-    let mut grouped: HashMap<PathBuf, Vec<&Diagnostic>> = HashMap::new();
-    for diag in diagnostics {
-        grouped.entry(diag.function.file_path.clone()).or_default().push(diag);
+fn group_by_file(contracts: &[ThrowContract]) -> HashMap<PathBuf, Vec<&ThrowContract>> {
+    let mut grouped: HashMap<PathBuf, Vec<&ThrowContract>> = HashMap::new();
+    for contract in contracts {
+        grouped.entry(contract.function.file_path.clone()).or_default().push(contract);
     }
     grouped
 }
 
 enum Modification {
     Insert { line: usize, content: Vec<String> },
-    AppendToJsdoc { jsdoc_end_line: usize, throws_lines: Vec<String> },
+    Replace { start_line: usize, end_line: usize, content: Vec<String> },
 }
 
-fn apply_fixes(file_path: &PathBuf, diagnostics: &[&Diagnostic]) -> Result<bool> {
+fn apply_fixes(file_path: &PathBuf, contracts: &[&ThrowContract]) -> Result<bool> {
     let raw = fs::read_to_string(file_path)?;
     // BOM は span のオフセットに含まれるため、剥がした分を行検索時に補正する
     let bom = if raw.starts_with('\u{FEFF}') { "\u{FEFF}" } else { "" };
@@ -41,7 +42,7 @@ fn apply_fixes(file_path: &PathBuf, diagnostics: &[&Diagnostic]) -> Result<bool>
 
     #[allow(clippy::cast_possible_truncation)]
     let bom_len = bom.len() as u32;
-    let mut modifications = collect_modifications(source, &lines, bom_len, diagnostics);
+    let mut modifications = collect_modifications(source, &lines, bom_len, contracts);
     if modifications.is_empty() {
         return Ok(false);
     }
@@ -49,11 +50,11 @@ fn apply_fixes(file_path: &PathBuf, diagnostics: &[&Diagnostic]) -> Result<bool>
     modifications.sort_by(|a, b| {
         let line_a = match a {
             Modification::Insert { line, .. } => *line,
-            Modification::AppendToJsdoc { jsdoc_end_line, .. } => *jsdoc_end_line,
+            Modification::Replace { start_line, .. } => *start_line,
         };
         let line_b = match b {
             Modification::Insert { line, .. } => *line,
-            Modification::AppendToJsdoc { jsdoc_end_line, .. } => *jsdoc_end_line,
+            Modification::Replace { start_line, .. } => *start_line,
         };
         line_b.cmp(&line_a)
     });
@@ -70,22 +71,8 @@ fn apply_fixes(file_path: &PathBuf, diagnostics: &[&Diagnostic]) -> Result<bool>
                     result_lines.insert(line + i, formatted_line);
                 }
             }
-            Modification::AppendToJsdoc { jsdoc_end_line, throws_lines } => {
-                let indent = detect_jsdoc_indent(&result_lines, jsdoc_end_line);
-                let current_line = &result_lines[jsdoc_end_line];
-                let closing_pos = current_line.rfind("*/").unwrap_or(current_line.len());
-                let before_close = current_line[..closing_pos].trim_end();
-
-                let mut new_lines: Vec<String> = Vec::new();
-                if !before_close.is_empty() && before_close != "*" {
-                    new_lines.push(before_close.to_string());
-                }
-                for throws_line in &throws_lines {
-                    new_lines.push(format!("{indent} * {throws_line}"));
-                }
-                new_lines.push(format!("{indent} */"));
-
-                result_lines.splice(jsdoc_end_line..=jsdoc_end_line, new_lines);
+            Modification::Replace { start_line, end_line, content } => {
+                result_lines.splice(start_line..=end_line, content);
             }
         }
     }
@@ -104,29 +91,30 @@ fn collect_modifications(
     source: &str,
     lines: &[&str],
     bom_len: u32,
-    diagnostics: &[&Diagnostic],
+    contracts: &[&ThrowContract],
 ) -> Vec<Modification> {
     let mut modifications = Vec::new();
 
-    for diag in diagnostics {
+    for contract in contracts {
         let func_line =
-            find_function_line(source, diag.function.span.start.saturating_sub(bom_len));
+            find_function_line(source, contract.function.span.start.saturating_sub(bom_len));
         let Some(func_line) = func_line else {
             continue;
         };
 
-        let throws_entries = generate_throws_entries(&diag.missing_throws);
-        if throws_entries.is_empty() {
-            continue;
-        }
+        let throws_entries = generate_throws_entries(&contract.required_throws);
 
-        if let Some(jsdoc_end_line) = find_jsdoc_end_line(lines, func_line) {
-            modifications
-                .push(Modification::AppendToJsdoc { jsdoc_end_line, throws_lines: throws_entries });
-        } else {
+        if let Some((start_line, end_line)) = find_jsdoc_range(lines, func_line) {
+            let existing: Vec<String> =
+                lines[start_line..=end_line].iter().map(|line| (*line).to_string()).collect();
+            let content = sync_jsdoc(&existing, &throws_entries);
+            if content != existing {
+                modifications.push(Modification::Replace { start_line, end_line, content });
+            }
+        } else if !throws_entries.is_empty() {
             let mut comment = vec!["/**".to_string()];
             for entry in throws_entries {
-                comment.push(format!(" * {entry}"));
+                comment.push(format!(" * {}", entry.text));
             }
             comment.push(" */".to_string());
             modifications.push(Modification::Insert { line: func_line, content: comment });
@@ -145,7 +133,7 @@ fn find_function_line(source: &str, byte_offset: u32) -> Option<usize> {
     Some(source[..offset].matches('\n').count())
 }
 
-fn find_jsdoc_end_line(lines: &[&str], func_line: usize) -> Option<usize> {
+fn find_jsdoc_range(lines: &[&str], func_line: usize) -> Option<(usize, usize)> {
     if func_line == 0 {
         return None;
     }
@@ -168,7 +156,7 @@ fn find_jsdoc_end_line(lines: &[&str], func_line: usize) -> Option<usize> {
     for i in (0..=end_line).rev() {
         let trimmed = lines[i].trim();
         if trimmed.starts_with("/**") {
-            return Some(end_line);
+            return Some((i, end_line));
         }
         if trimmed.starts_with("/*") && !trimmed.starts_with("/**") {
             return None;
@@ -187,24 +175,138 @@ fn detect_indent(lines: &[String], line_idx: usize) -> String {
     line[..line.len() - trimmed_len].to_string()
 }
 
-fn detect_jsdoc_indent(lines: &[String], jsdoc_end_line: usize) -> String {
-    let line = &lines[jsdoc_end_line];
-    let trimmed = line.trim_start();
-    line[..line.len() - trimmed.len()].to_string()
+struct ThrowsEntry {
+    type_name: String,
+    text: String,
 }
 
-fn generate_throws_entries(missing_throws: &[PropagatedThrow]) -> Vec<String> {
-    missing_throws
+fn generate_throws_entries(required_throws: &[PropagatedThrow]) -> Vec<ThrowsEntry> {
+    let mut seen = HashSet::new();
+    required_throws
         .iter()
-        .map(|throw| {
+        .filter_map(|throw| {
             let type_name = match &throw.error_type {
                 ErrorType::Named(name) | ErrorType::Rethrow(name) => name.as_str(),
                 ErrorType::Unknown => "unknown",
             };
+            if !seen.insert(type_name.to_string()) {
+                return None;
+            }
             let from_info = format_from_info(&throw.origin_function);
-            format!("@throws {{{type_name}}} from {from_info}")
+            Some(ThrowsEntry {
+                type_name: type_name.to_string(),
+                text: format!("@throws {{{type_name}}} from {from_info}"),
+            })
         })
         .collect()
+}
+
+fn sync_jsdoc(existing: &[String], desired: &[ThrowsEntry]) -> Vec<String> {
+    let desired_types: HashSet<&str> =
+        desired.iter().map(|entry| entry.type_name.as_str()).collect();
+    let mut matched = HashSet::new();
+    let mut result = Vec::new();
+
+    for line in existing {
+        let Some(declaration) = parse_throws_declaration(line) else {
+            result.push(line.clone());
+            continue;
+        };
+
+        let is_desired = desired_types.contains(declaration.type_name.as_str());
+        if declaration.manual {
+            if is_desired {
+                matched.insert(declaration.type_name.clone());
+            }
+            result.push(line.clone());
+        } else if is_desired && matched.insert(declaration.type_name) {
+            result.push(line.clone());
+        }
+    }
+
+    let missing: Vec<&ThrowsEntry> =
+        desired.iter().filter(|entry| !matched.contains(entry.type_name.as_str())).collect();
+
+    if missing.is_empty() {
+        return if has_jsdoc_content(&result) { result } else { Vec::new() };
+    }
+
+    if !has_jsdoc_content(&result) {
+        let indent = existing.first().map_or("", |line| leading_whitespace(line));
+        return generated_jsdoc(indent, &missing);
+    }
+
+    insert_missing_throws(result, &missing)
+}
+
+struct ParsedThrowsDeclaration {
+    type_name: String,
+    manual: bool,
+}
+
+fn parse_throws_declaration(line: &str) -> Option<ParsedThrowsDeclaration> {
+    let tag_start = line.find("@throws")?;
+    let after_tag = line[tag_start + "@throws".len()..].trim_start();
+    let type_start = after_tag.strip_prefix('{')?;
+    let type_end = type_start.find('}')?;
+    let type_name = type_start[..type_end].trim();
+    if type_name.is_empty() {
+        return None;
+    }
+
+    let remainder = type_start[type_end + 1..]
+        .trim()
+        .strip_suffix("*/")
+        .unwrap_or_else(|| type_start[type_end + 1..].trim())
+        .trim();
+    let manual = !remainder.is_empty() && !remainder.starts_with("from ");
+
+    Some(ParsedThrowsDeclaration { type_name: type_name.to_string(), manual })
+}
+
+fn has_jsdoc_content(lines: &[String]) -> bool {
+    lines.iter().any(|line| {
+        let mut content = line.trim();
+        if let Some(rest) = content.strip_prefix("/**") {
+            content = rest.trim();
+        }
+        if let Some(rest) = content.strip_suffix("*/") {
+            content = rest.trim();
+        }
+        if let Some(rest) = content.strip_prefix('*') {
+            content = rest.trim();
+        }
+        !content.is_empty()
+    })
+}
+
+fn generated_jsdoc(indent: &str, entries: &[&ThrowsEntry]) -> Vec<String> {
+    let mut result = vec![format!("{indent}/**")];
+    result.extend(entries.iter().map(|entry| format!("{indent} * {}", entry.text)));
+    result.push(format!("{indent} */"));
+    result
+}
+
+fn insert_missing_throws(mut lines: Vec<String>, entries: &[&ThrowsEntry]) -> Vec<String> {
+    let Some(closing_line) = lines.iter().rposition(|line| line.contains("*/")) else {
+        return lines;
+    };
+    let indent = leading_whitespace(&lines[closing_line]).to_string();
+    let closing_pos = lines[closing_line].rfind("*/").unwrap_or(lines[closing_line].len());
+    let before_close = lines[closing_line][..closing_pos].trim_end().to_string();
+    let mut replacement = Vec::new();
+
+    if !before_close.trim().is_empty() && before_close.trim() != "*" {
+        replacement.push(before_close);
+    }
+    replacement.extend(entries.iter().map(|entry| format!("{indent} * {}", entry.text)));
+    replacement.push(format!("{indent} */"));
+    lines.splice(closing_line..=closing_line, replacement);
+    lines
+}
+
+fn leading_whitespace(line: &str) -> &str {
+    &line[..line.len() - line.trim_start().len()]
 }
 
 fn format_from_info(origin_function: &FunctionId) -> String {
@@ -212,4 +314,72 @@ fn format_from_info(origin_function: &FunctionId) -> String {
         origin_function.file_path.file_name().and_then(|s| s.to_str()).unwrap_or("unknown");
 
     format!("{file_name}:{}", origin_function.name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(type_name: &str) -> ThrowsEntry {
+        ThrowsEntry {
+            type_name: type_name.to_string(),
+            text: format!("@throws {{{type_name}}} from input.ts:test"),
+        }
+    }
+
+    #[test]
+    fn stale_generated_throw_is_removed_without_dropping_jsdoc_description() {
+        let existing = vec![
+            "/**".to_string(),
+            " * Performs the operation.".to_string(),
+            " * @throws {StaleError} from old.ts:old".to_string(),
+            " */".to_string(),
+        ];
+
+        let synced = sync_jsdoc(&existing, &[]);
+
+        assert_eq!(
+            synced,
+            vec!["/**".to_string(), " * Performs the operation.".to_string(), " */".to_string()]
+        );
+    }
+
+    #[test]
+    fn missing_throw_is_added_to_existing_single_line_jsdoc() {
+        let existing = vec!["/** Performs the operation. */".to_string()];
+
+        let synced = sync_jsdoc(&existing, &[entry("AppError")]);
+
+        assert_eq!(
+            synced,
+            vec![
+                "/** Performs the operation.".to_string(),
+                " * @throws {AppError} from input.ts:test".to_string(),
+                " */".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn duplicate_generated_throws_are_collapsed_but_manual_description_is_preserved() {
+        let existing = vec![
+            "/**".to_string(),
+            " * @throws {AppError}".to_string(),
+            " * @throws {AppError} from input.ts:test".to_string(),
+            " * @throws {ManualError} Documented by a maintainer.".to_string(),
+            " */".to_string(),
+        ];
+
+        let synced = sync_jsdoc(&existing, &[entry("AppError")]);
+
+        assert_eq!(
+            synced,
+            vec![
+                "/**".to_string(),
+                " * @throws {AppError}".to_string(),
+                " * @throws {ManualError} Documented by a maintainer.".to_string(),
+                " */".to_string()
+            ]
+        );
+    }
 }

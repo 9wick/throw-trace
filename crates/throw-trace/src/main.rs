@@ -36,7 +36,7 @@ enum Commands {
         #[arg(long, short = 'f', default_value = "text")]
         format: String,
     },
-    /// Auto-insert missing @throws declarations
+    /// Synchronize @throws declarations by adding missing and removing stale generated entries
     Fix {
         /// Files or directories to fix
         #[arg(default_value = ".")]
@@ -102,8 +102,8 @@ fn run() -> Result<ExitCode> {
             let mut analyzer = Analyzer::new();
             analyzer.analyze_files(&files)?;
 
-            let diagnostics = analyzer.generate_diagnostics();
-            let fixed_count = fix_files(&diagnostics)?;
+            let contracts = analyzer.generate_throw_contracts();
+            let fixed_count = fix_files(&contracts)?;
 
             println!("Fixed {fixed_count} file(s)");
             Ok(ExitCode::SUCCESS)

@@ -5,8 +5,9 @@
 > Run `bash tests/catalog/generate_readme.sh` to regenerate.
 
 throw-trace が対応すべきパターンを網羅したカタログテスト集。
-各ファイルは「期待される `@throws` アノテーション付きの TypeScript コード」そのものであり、
-ツールの出力と diff を取ることで正しさを検証する。
+`cases/` 配下は同期前の `before.ts` に `fix` を適用し、`expected.ts` との完全一致と
+2回目の `fix` が不変であることを検証する。直下の `.ts` は従来カタログとして、
+宣言漏れがないことを継続確認する。
 
 ## Summary
 
@@ -55,6 +56,12 @@ throw-trace が対応すべきパターンを網羅したカタログテスト�
 | 41 | [41_event_and_timer.ts](#41_event_and_timerts) | setTimeout / setInterval / EventListener のパターン |
 | 42 | [42_closure_registration.ts](#42_closure_registrationts) | closure 登録パターン（コールバック登録 / イベントハンドラ） |
 | 43 | [43_generic_type_param.ts](#43_generic_type_paramts) | generic 型パラメータの throw パターン（constraint 置換） |
+
+## Sync Golden Cases
+
+| Case | Status | Description |
+|------|--------|-------------|
+| [01_direct_throw](#sync-01_direct_throw) | supported | 直接throwの追加・削除・置換・手書き宣言維持 |
 
 ---
 
@@ -2481,6 +2488,106 @@ function throwsUnconstrained<E>(err: E): void {
  */
 function callsUnconstrained(err: string) {
   throwsUnconstrained(err);
+}
+```
+
+---
+
+## Sync Golden Case Details
+
+### Sync 01_direct_throw
+
+直接throwの追加・削除・置換・手書き宣言維持
+
+#### Before
+
+```typescript
+// 直接throwの同期基本ケース
+
+class AppError extends Error {}
+class StaleError extends Error {}
+class WrongError extends Error {}
+class ManualError extends Error {}
+
+function addsMissing() {
+  throw new AppError();
+}
+
+/** @throws {AppError} */
+function keepsCorrect() {
+  throw new AppError();
+}
+
+/** @throws {StaleError} */
+function removesStale() {
+  return 1;
+}
+
+/** @throws {WrongError} */
+function replacesWrong() {
+  throw new AppError();
+}
+
+/** @throws {ManualError} Raised by an external runtime hook. */
+function preservesManualDescription() {
+  return 2;
+}
+
+/** @throws {AppError} The operation failed. */
+function preservesMatchingDescription() {
+  throw new AppError();
+}
+
+function staysWithoutThrows() {
+  return 3;
+}
+```
+
+#### Expected
+
+```typescript
+// 直接throwの同期基本ケース
+
+class AppError extends Error {}
+class StaleError extends Error {}
+class WrongError extends Error {}
+class ManualError extends Error {}
+
+/**
+ * @throws {AppError} from before.ts:addsMissing
+ */
+function addsMissing() {
+  throw new AppError();
+}
+
+/** @throws {AppError} */
+function keepsCorrect() {
+  throw new AppError();
+}
+
+function removesStale() {
+  return 1;
+}
+
+/**
+ * @throws {AppError} from before.ts:replacesWrong
+ */
+function replacesWrong() {
+  throw new AppError();
+}
+
+/** @throws {ManualError} Raised by an external runtime hook. */
+function preservesManualDescription() {
+  return 2;
+}
+
+/** @throws {AppError} The operation failed. */
+function preservesMatchingDescription() {
+  throw new AppError();
+}
+
+function staysWithoutThrows() {
+  return 3;
 }
 ```
 
