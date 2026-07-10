@@ -1,8 +1,9 @@
 use compact_str::CompactString;
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
-    BindingPatternKind, CallExpression, Class, Expression, Function, MethodDefinition, Statement,
-    TSInterfaceDeclaration, TSType, TSTypeParameterDeclaration, ThrowStatement, TryStatement,
+    BindingPatternKind, CallExpression, Class, Decorator, Expression, Function, MethodDefinition,
+    Statement, TSInterfaceDeclaration, TSType, TSTypeParameterDeclaration, ThrowStatement,
+    TryStatement,
 };
 use oxc_ast_visit::{walk, Visit};
 use oxc_parser::Parser;
@@ -40,6 +41,10 @@ struct FunctionExtractor<'a> {
     variable_types: HashMap<String, Vec<String>>,
     // Current class context for method extraction
     current_class: Option<TypeId>,
+    // Decorator は class 定義時に実行されるため、decorated method の
+    // スコープに入る前に外側スコープで visit 済みの decorator を記録し、
+    // method 本体の walk での二重 visit（＝method への誤帰属）を防ぐ
+    hoisted_decorator_spans: std::collections::HashSet<(u32, u32)>,
 }
 
 impl<'a> FunctionExtractor<'a> {
@@ -54,6 +59,7 @@ impl<'a> FunctionExtractor<'a> {
             catch_param_stack: Vec::new(),
             variable_types: HashMap::new(),
             current_class: None,
+            hoisted_decorator_spans: std::collections::HashSet::new(),
         }
     }
 
@@ -96,6 +102,13 @@ impl<'a> FunctionExtractor<'a> {
 
     fn end_function(&mut self) {
         self.scope_stack.pop();
+    }
+
+    // decorator を現在の（method の外側の）スコープで visit し、
+    // 以降の walk で二重 visit しないよう span を記録する
+    fn hoist_decorator(&mut self, decorator: &Decorator<'a>) {
+        walk::walk_decorator(self, decorator);
+        self.hoisted_decorator_spans.insert((decorator.span.start, decorator.span.end));
     }
 
     fn current_sig_mut(&mut self) -> Option<&mut FunctionSignature> {
@@ -714,19 +727,39 @@ impl<'a> Visit<'a> for FunctionExtractor<'a> {
         let method_name = key_id.name.as_str();
         let name_span = key_id.span;
 
+        // method / parameter decorator は class 定義時に実行されるため、
+        // method のスコープに入る前（class 定義を囲むスコープ）で visit する
+        for decorator in &method.decorators {
+            self.hoist_decorator(decorator);
+        }
+        for param in &method.value.params.items {
+            for decorator in &param.decorators {
+                self.hoist_decorator(decorator);
+            }
+        }
+
         let comment = preceding_jsdoc(self.source, method.span.start);
         let is_async = method.value.r#async;
 
+        // fix の JSDoc 挿入位置と preceding_jsdoc の探索位置を一致させるため、
+        // span は decorator を含む method.span を使う
         self.begin_function(
             method_name,
             name_span,
-            method.value.span,
+            method.span,
             is_async,
             comment.as_deref(),
             method.value.type_parameters.as_deref(),
         );
         walk::walk_method_definition(self, method);
         self.end_function();
+    }
+
+    fn visit_decorator(&mut self, decorator: &Decorator<'a>) {
+        if self.hoisted_decorator_spans.contains(&(decorator.span.start, decorator.span.end)) {
+            return;
+        }
+        walk::walk_decorator(self, decorator);
     }
 }
 

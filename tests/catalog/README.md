@@ -56,6 +56,7 @@ throw-trace が対応すべきパターンを網羅したカタログテスト�
 | 41 | [41_event_and_timer.ts](#41_event_and_timerts) | setTimeout / setInterval / EventListener のパターン |
 | 42 | [42_closure_registration.ts](#42_closure_registrationts) | closure 登録パターン（コールバック登録 / イベントハンドラ） |
 | 43 | [43_generic_type_param.ts](#43_generic_type_paramts) | generic 型パラメータの throw パターン（constraint 置換） |
+| 44 | [44_decorator.ts](#44_decoratorts) | decorator 適用時の throw パターン（class / method / field decorator） |
 
 ## Sync Golden Cases
 
@@ -2489,6 +2490,156 @@ function throwsUnconstrained<E>(err: E): void {
 function callsUnconstrained(err: string) {
   throwsUnconstrained(err);
 }
+```
+
+### 44_decorator.ts
+
+decorator 適用時の throw パターン（class / method / field decorator）
+
+```typescript
+// decorator 適用時の throw パターン（class / method / field decorator）
+//
+// decorator は class 定義時（モジュール評価時、または定義を囲む関数の実行時）に
+// 実行される。constructor / method の呼び出し時ではない。
+// decorator 内の呼び出しは class 定義を囲むスコープに帰属される。
+
+class DecoratorError extends Error {}
+
+// --- 適用時に throw しうる decorator 関数（宣言済み）---
+
+/** @throws {DecoratorError} */
+function sealed(value: Function, context: ClassDecoratorContext) {
+  throw new DecoratorError();
+}
+
+/** @throws {DecoratorError} */
+function tagged(tag: string) {
+  if (!tag) throw new DecoratorError();
+  return function (value: Function, context: ClassDecoratorContext) {};
+}
+
+/** @throws {DecoratorError} */
+function logMethod(value: Function, context: ClassMethodDecoratorContext) {
+  if (!context) throw new DecoratorError();
+}
+
+/** @throws {DecoratorError} */
+function methodTag(tag: string) {
+  if (!tag) throw new DecoratorError();
+  return function (value: Function, context: ClassMethodDecoratorContext) {};
+}
+
+/** @throws {DecoratorError} */
+function fieldTag(tag: string) {
+  if (!tag) throw new DecoratorError();
+  return function (value: undefined, context: ClassFieldDecoratorContext) {};
+}
+
+// --- トップレベルの class decorator（bare identifier）---
+// @sealed は CallExpression ではないため適用自体は追跡されない。
+// throw はモジュール評価時に飛ぶもので、constructor 呼び出し側に
+// 宣言を要求しないのは正しい挙動。
+
+@sealed
+class SealedService {
+  constructor() {}
+}
+
+function createSealedService() {
+  return new SealedService();
+}
+
+// --- トップレベルの class decorator factory 呼び出し ---
+// tagged("service") はモジュール評価時の呼び出しで、囲む関数が
+// 存在しないため帰属先なし。@throws は要求されない。
+
+@tagged("service")
+class TaggedService {}
+
+// --- method decorator（bare identifier）---
+// CallExpression ではないため未追跡。greet() の呼び出し側にも伝播しない。
+
+class WithMethodDecorator {
+  @logMethod
+  greet() {
+    return "hi";
+  }
+}
+
+function callsDecoratedMethod(svc: WithMethodDecorator) {
+  return svc.greet();
+}
+
+// --- method decorator factory 呼び出し（トップレベル class）---
+// methodTag("m") は class 定義時＝モジュール評価時に実行されるため、
+// method の throw として帰属されない。run() にも呼び出し側にも @throws 不要。
+
+class WithMethodFactory {
+  @methodTag("m")
+  run() {
+    return 1;
+  }
+}
+
+function callsFactoryDecoratedMethod(svc: WithMethodFactory) {
+  return svc.run();
+}
+
+// --- decorated method 自体が throw する場合 ---
+// method 本体の throw は通常どおり要求される。
+// JSDoc は decorator の前に置く（fix もこの位置に挿入する）。
+
+class DecoratedThrower {
+  /** @throws {DecoratorError} */
+  @methodTag("t")
+  boom() {
+    throw new DecoratorError();
+  }
+}
+
+// --- field decorator factory 呼び出し ---
+// field の decorator も class 定義時実行のため、トップレベルでは帰属先なし。
+
+class WithFieldFactory {
+  @fieldTag("f")
+  field = 1;
+}
+
+// --- 関数内での decorator 適用（class decorator）---
+// class 定義が関数内にある場合、decorator は関数の実行時に走るため、
+// 囲む関数への帰属は正当（この関数を呼ぶと decorator の throw が飛びうる）。
+
+/**
+ * @throws {DecoratorError} from 44_decorator.ts:tagged
+ */
+function createFallbackClass() {
+  @tagged("fallback")
+  class Fallback {}
+  return Fallback;
+}
+
+// --- 関数内での decorator 適用（method decorator factory）---
+// method decorator も class 定義時に実行されるため、method ではなく
+// 囲む関数に帰属される。
+
+/**
+ * @throws {DecoratorError} from 44_decorator.ts:methodTag
+ */
+function definesDecoratedClass() {
+  class Inner {
+    @methodTag("inner")
+    innerRun() {
+      return 1;
+    }
+  }
+  return Inner;
+}
+
+// --- 参考: legacy parameter decorator（experimentalDecorators）---
+// NestJS 等の constructor(@Inject("x") dep) 形式のパラメータ decorator も
+// method / constructor のスコープ外（class 定義を囲むスコープ）に帰属される。
+// TC39 decorator ではパラメータ decorator が存在せず型エラーになるため、
+// このカタログには含めない。
 ```
 
 ---
