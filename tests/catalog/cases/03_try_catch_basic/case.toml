@@ -1,0 +1,2 @@
+description = "catch-all・try外呼び出し・rethrowの同期境界"
+status = "supported"

@@ -63,6 +63,8 @@ throw-trace が対応すべきパターンを網羅したカタログテスト�
 | Case | Status | Description |
 |------|--------|-------------|
 | [01_direct_throw](#sync-01_direct_throw) | supported | 直接throwの追加・削除・置換・手書き宣言維持 |
+| [02_propagation](#sync-02_propagation) | supported | 直接throwから1段・2段・複数calleeへ伝播する同期 |
+| [03_try_catch_basic](#sync-03_try_catch_basic) | supported | catch-all・try外呼び出し・rethrowの同期境界 |
 
 ---
 
@@ -2739,6 +2741,254 @@ function preservesMatchingDescription() {
 
 function staysWithoutThrows() {
   return 3;
+}
+```
+
+### Sync 02_propagation
+
+直接throwから1段・2段・複数calleeへ伝播する同期
+
+#### Before
+
+```typescript
+// 関数呼び出し経由のthrow伝播同期
+
+class DBError extends Error {}
+class ParseError extends Error {}
+
+function dbQuery() {
+  throw new DBError();
+}
+
+function parse() {
+  throw new ParseError();
+}
+
+function getUser() {
+  return dbQuery();
+}
+
+/** @throws {ParseError} from before.ts:parse */
+function getUserName() {
+  return getUser();
+}
+
+/**
+ * @throws {DBError} from before.ts:dbQuery
+ */
+function loadAndParse() {
+  dbQuery();
+  return parse();
+}
+
+function helper() {
+  return 42;
+}
+
+/** @throws {DBError} from before.ts:dbQuery */
+function callsHelper() {
+  return helper();
+}
+
+/** @throws {DBError} Propagated by contract. */
+function preservesDescribedDeclaration() {
+  return dbQuery();
+}
+```
+
+#### Expected
+
+```typescript
+// 関数呼び出し経由のthrow伝播同期
+
+class DBError extends Error {}
+class ParseError extends Error {}
+
+/**
+ * @throws {DBError} from before.ts:dbQuery
+ */
+function dbQuery() {
+  throw new DBError();
+}
+
+/**
+ * @throws {ParseError} from before.ts:parse
+ */
+function parse() {
+  throw new ParseError();
+}
+
+/**
+ * @throws {DBError} from before.ts:dbQuery
+ */
+function getUser() {
+  return dbQuery();
+}
+
+/**
+ * @throws {DBError} from before.ts:dbQuery
+ */
+function getUserName() {
+  return getUser();
+}
+
+/**
+ * @throws {DBError} from before.ts:dbQuery
+ * @throws {ParseError} from before.ts:parse
+ */
+function loadAndParse() {
+  dbQuery();
+  return parse();
+}
+
+function helper() {
+  return 42;
+}
+
+function callsHelper() {
+  return helper();
+}
+
+/** @throws {DBError} Propagated by contract. */
+function preservesDescribedDeclaration() {
+  return dbQuery();
+}
+```
+
+### Sync 03_try_catch_basic
+
+catch-all・try外呼び出し・rethrowの同期境界
+
+#### Before
+
+```typescript
+// try/catchによる捕捉の同期基本ケース
+
+class AppError extends Error {}
+class NetworkError extends Error {}
+
+function risky() {
+  throw new AppError();
+}
+
+function fetchData() {
+  throw new NetworkError();
+}
+
+/** @throws {AppError} from before.ts:risky */
+function catchAll() {
+  try {
+    risky();
+  } catch (error) {
+    return null;
+  }
+}
+
+function catchAllNoParam() {
+  try {
+    risky();
+  } catch {
+    return null;
+  }
+}
+
+/** @throws {NetworkError} from before.ts:fetchData */
+function catchAllMultiple() {
+  try {
+    risky();
+    fetchData();
+  } catch (error) {
+    return null;
+  }
+}
+
+/** @throws {AppError} from before.ts:risky */
+function outsideTry() {
+  try {
+    risky();
+  } catch (error) {
+    return null;
+  }
+  fetchData();
+}
+
+function rethrowAll() {
+  try {
+    risky();
+  } catch (error) {
+    throw error;
+  }
+}
+```
+
+#### Expected
+
+```typescript
+// try/catchによる捕捉の同期基本ケース
+
+class AppError extends Error {}
+class NetworkError extends Error {}
+
+/**
+ * @throws {AppError} from before.ts:risky
+ */
+function risky() {
+  throw new AppError();
+}
+
+/**
+ * @throws {NetworkError} from before.ts:fetchData
+ */
+function fetchData() {
+  throw new NetworkError();
+}
+
+function catchAll() {
+  try {
+    risky();
+  } catch (error) {
+    return null;
+  }
+}
+
+function catchAllNoParam() {
+  try {
+    risky();
+  } catch {
+    return null;
+  }
+}
+
+function catchAllMultiple() {
+  try {
+    risky();
+    fetchData();
+  } catch (error) {
+    return null;
+  }
+}
+
+/**
+ * @throws {NetworkError} from before.ts:fetchData
+ */
+function outsideTry() {
+  try {
+    risky();
+  } catch (error) {
+    return null;
+  }
+  fetchData();
+}
+
+/**
+ * @throws {AppError} from before.ts:risky
+ */
+function rethrowAll() {
+  try {
+    risky();
+  } catch (error) {
+    throw error;
+  }
 }
 ```
 

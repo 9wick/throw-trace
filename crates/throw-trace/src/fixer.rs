@@ -291,7 +291,7 @@ fn insert_missing_throws(mut lines: Vec<String>, entries: &[&ThrowsEntry]) -> Ve
     let Some(closing_line) = lines.iter().rposition(|line| line.contains("*/")) else {
         return lines;
     };
-    let indent = leading_whitespace(&lines[closing_line]).to_string();
+    let indent = lines.first().map_or("", |line| leading_whitespace(line)).to_string();
     let closing_pos = lines[closing_line].rfind("*/").unwrap_or(lines[closing_line].len());
     let before_close = lines[closing_line][..closing_pos].trim_end().to_string();
     let mut replacement = Vec::new();
@@ -379,6 +379,27 @@ mod tests {
                 " * @throws {AppError}".to_string(),
                 " * @throws {ManualError} Documented by a maintainer.".to_string(),
                 " */".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn missing_throw_uses_jsdoc_base_indent() {
+        let existing = vec![
+            "  /**".to_string(),
+            "   * Performs the operation.".to_string(),
+            "   */".to_string(),
+        ];
+
+        let synced = sync_jsdoc(&existing, &[entry("AppError")]);
+
+        assert_eq!(
+            synced,
+            vec![
+                "  /**".to_string(),
+                "   * Performs the operation.".to_string(),
+                "   * @throws {AppError} from input.ts:test".to_string(),
+                "   */".to_string()
             ]
         );
     }
