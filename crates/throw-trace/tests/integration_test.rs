@@ -551,3 +551,54 @@ fn fix_preserves_bom_at_file_start() {
         "BOM must not be duplicated or moved into the file body"
     );
 }
+
+// decorator は class 定義時に実行されるため、method decorator factory の
+// 呼び出しは decorated method の throw として帰属してはならない
+#[test]
+fn check_method_decorator_not_attributed_to_method() {
+    let mut cmd = Command::cargo_bin("throw-trace").unwrap();
+    cmd.current_dir(workspace_root())
+        .args(["check", "tests/fixtures/decorator_attribution.ts"])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains("definesClass"))
+        .stdout(predicate::str::contains("(run)").not())
+        .stdout(predicate::str::contains("(innerRun)").not())
+        .stdout(predicate::str::contains("callsRun").not())
+        .stdout(predicate::str::contains("Found 1 errors"));
+}
+
+// fix が decorated method に挿入した JSDoc は check / 再 fix で
+// 宣言として認識されなければならない（冪等性）
+#[test]
+fn fix_decorated_method_inserts_recognized_jsdoc() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let test_file = temp_dir.path().join("decorated_method_fix.ts");
+    std::fs::copy(workspace_root().join("tests/fixtures/decorated_method_fix.ts"), &test_file)
+        .unwrap();
+
+    Command::cargo_bin("throw-trace")
+        .unwrap()
+        .args(["fix", test_file.to_str().unwrap()])
+        .assert()
+        .success();
+    let after_first = std::fs::read_to_string(&test_file).unwrap();
+    assert!(after_first.contains("@throws {BoomError}"));
+
+    // 挿入された宣言が check で認識される
+    Command::cargo_bin("throw-trace")
+        .unwrap()
+        .args(["check", test_file.to_str().unwrap()])
+        .assert()
+        .success();
+
+    // 再 fix で重複追記されない
+    Command::cargo_bin("throw-trace")
+        .unwrap()
+        .args(["fix", test_file.to_str().unwrap()])
+        .assert()
+        .success();
+    let after_second = std::fs::read_to_string(&test_file).unwrap();
+    assert_eq!(after_first, after_second, "fix must be idempotent for decorated methods");
+    assert_eq!(after_second.matches("@throws {BoomError}").count(), 1);
+}
