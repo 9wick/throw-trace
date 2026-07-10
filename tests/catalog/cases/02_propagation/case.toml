@@ -1,0 +1,2 @@
+description = "直接throwから1段・2段・複数calleeへ伝播する同期"
+status = "supported"
