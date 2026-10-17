@@ -133,13 +133,14 @@ impl Analyzer {
 
         let mut pending: VecDeque<PathBuf> = VecDeque::new();
         let mut depth = 0;
+        let mut opened_files = HashSet::new();
 
         loop {
             if depth >= self.config.max_depth {
                 break;
             }
 
-            let new_files = self.collect_definition_targets(&mut ts_server);
+            let new_files = self.collect_definition_targets(&mut ts_server, &mut opened_files);
             if new_files.is_empty() {
                 break;
             }
@@ -161,74 +162,74 @@ impl Analyzer {
         }
     }
 
-    fn collect_definition_targets(&mut self, ts_server: &mut TsServer) -> HashSet<PathBuf> {
+    fn collect_definition_targets(
+        &mut self,
+        ts_server: &mut TsServer,
+        opened_files: &mut HashSet<PathBuf>,
+    ) -> HashSet<PathBuf> {
         let mut targets = HashSet::new();
         let workspace_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
-        let call_infos: Vec<(PathBuf, Span)> = self
-            .signatures
-            .values()
-            .flat_map(|sig| {
-                sig.calls.iter().map(|call| (sig.id.file_path.clone(), call.callee_span))
-            })
-            .collect();
-
-        for (file_path, callee_span) in call_infos {
-            if self.resolved_calls.contains_key(&(file_path.clone(), callee_span)) {
-                continue;
+        let mut calls_by_file: HashMap<PathBuf, HashSet<Span>> = HashMap::new();
+        for sig in self.signatures.values() {
+            for call in &sig.calls {
+                if !self.resolved_calls.contains_key(&(sig.id.file_path.clone(), call.callee_span))
+                {
+                    calls_by_file
+                        .entry(sig.id.file_path.clone())
+                        .or_default()
+                        .insert(call.callee_span);
+                }
             }
+        }
+        let mut definitions = self.cache.definitions(&workspace_root);
 
+        for (file_path, spans) in calls_by_file {
             let Ok(source) = fs::read_to_string(&file_path) else {
                 continue;
             };
-
             let content_hash = CacheStore::content_hash(&source);
-            let Some(callee_text) =
-                source.get(callee_span.start as usize..callee_span.end as usize)
-            else {
-                continue;
-            };
 
-            if let Some((def_file, def_line)) = self.cache.lookup_definition(
-                &workspace_root,
-                &file_path,
-                &content_hash,
-                callee_span,
-                callee_text,
-            ) {
-                self.resolved_calls
-                    .insert((file_path.clone(), callee_span), (def_file.clone(), def_line));
-                if !self.analyzed_files.contains(&def_file) {
-                    targets.insert(def_file);
+            for callee_span in spans {
+                let Some(callee_text) =
+                    source.get(callee_span.start as usize..callee_span.end as usize)
+                else {
+                    continue;
+                };
+                if let Some((def_file, def_line)) =
+                    definitions.lookup(&file_path, &content_hash, callee_span, callee_text)
+                {
+                    self.resolved_calls
+                        .insert((file_path.clone(), callee_span), (def_file.clone(), def_line));
+                    if !self.analyzed_files.contains(&def_file) {
+                        targets.insert(def_file);
+                    }
+                    continue;
                 }
-                continue;
-            }
 
-            let _ = ts_server.open_file(&file_path);
-
-            let (line, col) = byte_offset_to_line_col(&source, callee_span.start);
-
-            if let Ok(definitions) = ts_server.definition(&file_path, line, col) {
-                if let Some(def) = definitions.first() {
-                    let def_path = PathBuf::from(&def.file);
-                    let canonical = def_path.canonicalize().unwrap_or_else(|_| def_path.clone());
-
-                    self.resolved_calls.insert(
-                        (file_path.clone(), callee_span),
-                        (canonical.clone(), def.start.line),
-                    );
-
-                    self.cache.update_definition(
-                        &workspace_root,
-                        &file_path,
-                        content_hash,
-                        callee_span,
-                        callee_text.to_string(),
-                        (canonical.clone(), def.start.line),
-                    );
-
-                    if !self.analyzed_files.contains(&canonical) {
-                        targets.insert(canonical);
+                if !opened_files.contains(&file_path) && ts_server.open_file(&file_path).is_ok() {
+                    opened_files.insert(file_path.clone());
+                }
+                let (line, col) = byte_offset_to_line_col(&source, callee_span.start);
+                if let Ok(locations) = ts_server.definition(&file_path, line, col) {
+                    if let Some(def) = locations.first() {
+                        let def_path = PathBuf::from(&def.file);
+                        let canonical =
+                            def_path.canonicalize().unwrap_or_else(|_| def_path.clone());
+                        self.resolved_calls.insert(
+                            (file_path.clone(), callee_span),
+                            (canonical.clone(), def.start.line),
+                        );
+                        definitions.update(
+                            &file_path,
+                            content_hash.clone(),
+                            callee_span,
+                            callee_text.to_string(),
+                            (canonical.clone(), def.start.line),
+                        );
+                        if !self.analyzed_files.contains(&canonical) {
+                            targets.insert(canonical);
+                        }
                     }
                 }
             }
