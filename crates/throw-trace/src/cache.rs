@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
+use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use throw_trace_core::{
     Diagnostic, FunctionId, FunctionSignature, MethodSignature, Span, TypeRelation, TypeResolver,
@@ -331,24 +332,7 @@ impl CacheStore {
         callee_span: Span,
         callee_text: &str,
     ) -> Option<(PathBuf, u32)> {
-        let key = Self::definition_key(file_path, content_hash, callee_span, callee_text);
-        let entry = self.data.definitions.get(&key)?.clone();
-        let definition_source = fs::read_to_string(&entry.definition_file).ok()?;
-        let definition_file_hash = Self::content_hash(&definition_source);
-        let resolution_fingerprint = self.resolution_fingerprint_for_files(
-            workspace_root,
-            &[entry.caller_file.clone(), entry.definition_file.clone()],
-        );
-        if entry.caller_hash == content_hash
-            && entry.callee_span == callee_span
-            && entry.callee_text == callee_text
-            && entry.definition_file_hash == definition_file_hash
-            && entry.resolution_fingerprint == resolution_fingerprint
-        {
-            Some((entry.definition_file.clone(), entry.definition_line))
-        } else {
-            None
-        }
+        self.definitions(workspace_root).lookup(file_path, content_hash, callee_span, callee_text)
     }
 
     pub fn update_definition(
@@ -360,31 +344,25 @@ impl CacheStore {
         callee_text: String,
         definition: (PathBuf, u32),
     ) {
-        let (definition_file, definition_line) = definition;
-        let Ok(definition_source) = fs::read_to_string(&definition_file) else {
-            return;
-        };
+        self.definitions(workspace_root).update(
+            file_path,
+            content_hash,
+            callee_span,
+            callee_text,
+            definition,
+        );
+    }
 
-        let key = Self::definition_key(file_path, &content_hash, callee_span, &callee_text);
-        let caller_file = canonical_or_self(file_path);
-        let resolution_fingerprint = self.resolution_fingerprint_for_files(
+    pub fn definitions(&mut self, workspace_root: &Path) -> DefinitionCache<'_> {
+        let workspace_root = canonical_or_self(workspace_root);
+        let workspace_fingerprint = self.workspace_resolution_fingerprint(&workspace_root);
+        DefinitionCache {
+            store: self,
             workspace_root,
-            &[caller_file.clone(), definition_file.clone()],
-        );
-        self.data.definitions.insert(
-            key,
-            CachedDefinition {
-                caller_file,
-                caller_hash: content_hash,
-                callee_span,
-                callee_text,
-                definition_file_hash: Self::content_hash(&definition_source),
-                resolution_fingerprint,
-                definition_file,
-                definition_line,
-            },
-        );
-        self.dirty = true;
+            workspace_fingerprint,
+            file_hashes: BTreeMap::new(),
+            ancestor_entries: BTreeMap::new(),
+        }
     }
 
     pub fn save(&mut self) -> Result<()> {
@@ -395,32 +373,16 @@ impl CacheStore {
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent)?;
             let mut tmp = tempfile::NamedTempFile::new_in(parent)?;
-            serde_json::to_writer_pretty(&mut tmp, &self.data)?;
+            {
+                let mut writer = BufWriter::new(&mut tmp);
+                serde_json::to_writer_pretty(&mut writer, &self.data)?;
+                writer.flush()?;
+            }
             tmp.persist(&self.path)?;
         }
 
         self.dirty = false;
         Ok(())
-    }
-
-    fn resolution_fingerprint_for_files(
-        &mut self,
-        workspace_root: &Path,
-        files: &[PathBuf],
-    ) -> String {
-        let normalized_root = canonical_or_self(workspace_root);
-        let normalized_root = if normalized_root == self.workspace_root {
-            self.workspace_root.clone()
-        } else {
-            normalized_root
-        };
-        let workspace_fingerprint = self.workspace_resolution_fingerprint(&normalized_root);
-        let file_entries = resolution_fingerprint_entries_for_files_with_workspace_entries(
-            &normalized_root,
-            files,
-            BTreeMap::new(),
-        );
-        CacheStore::stable_json_hash(&(workspace_fingerprint, file_entries))
     }
 
     fn workspace_resolution_fingerprint(&mut self, workspace_root: &Path) -> String {
@@ -445,6 +407,101 @@ impl CacheStore {
     pub fn stable_json_hash<T: Serialize>(value: &T) -> String {
         let bytes = serde_json::to_vec(value).expect("cache key serialization should not fail");
         hash_bytes(&bytes)
+    }
+}
+
+/// Validation snapshots are scoped to a single definition-resolution pass.
+/// A new pass re-reads sources and configuration, including external ancestors.
+pub struct DefinitionCache<'a> {
+    store: &'a mut CacheStore,
+    workspace_root: PathBuf,
+    workspace_fingerprint: String,
+    file_hashes: BTreeMap<PathBuf, Option<String>>,
+    ancestor_entries: BTreeMap<PathBuf, Vec<(String, String)>>,
+}
+
+impl DefinitionCache<'_> {
+    fn file_hash(&mut self, path: &Path) -> Option<String> {
+        self.file_hashes
+            .entry(path.to_path_buf())
+            .or_insert_with(|| {
+                fs::read_to_string(path).ok().map(|source| CacheStore::content_hash(&source))
+            })
+            .clone()
+    }
+
+    fn resolution_fingerprint(&mut self, files: &[PathBuf]) -> String {
+        let mut entries = BTreeMap::new();
+        for file in files {
+            let parent = file.parent().unwrap_or_else(|| Path::new("."));
+            let file_entries =
+                self.ancestor_entries.entry(parent.to_path_buf()).or_insert_with(|| {
+                    resolution_fingerprint_entries_for_files_with_workspace_entries(
+                        &self.workspace_root,
+                        std::slice::from_ref(file),
+                        BTreeMap::new(),
+                    )
+                });
+            entries.extend(file_entries.iter().cloned());
+        }
+        let entries: Vec<_> = entries.into_iter().collect();
+        CacheStore::stable_json_hash(&(&self.workspace_fingerprint, entries))
+    }
+
+    pub fn lookup(
+        &mut self,
+        file_path: &Path,
+        content_hash: &str,
+        callee_span: Span,
+        callee_text: &str,
+    ) -> Option<(PathBuf, u32)> {
+        let key = CacheStore::definition_key(file_path, content_hash, callee_span, callee_text);
+        let entry = self.store.data.definitions.get(&key)?.clone();
+        let definition_file_hash = self.file_hash(&entry.definition_file)?;
+        let resolution_fingerprint = self
+            .resolution_fingerprint(&[entry.caller_file.clone(), entry.definition_file.clone()]);
+        if entry.caller_hash == content_hash
+            && entry.callee_span == callee_span
+            && entry.callee_text == callee_text
+            && entry.definition_file_hash == definition_file_hash
+            && entry.resolution_fingerprint == resolution_fingerprint
+        {
+            Some((entry.definition_file, entry.definition_line))
+        } else {
+            None
+        }
+    }
+
+    pub fn update(
+        &mut self,
+        file_path: &Path,
+        content_hash: String,
+        callee_span: Span,
+        callee_text: String,
+        definition: (PathBuf, u32),
+    ) {
+        let (definition_file, definition_line) = definition;
+        let Some(definition_file_hash) = self.file_hash(&definition_file) else {
+            return;
+        };
+        let key = CacheStore::definition_key(file_path, &content_hash, callee_span, &callee_text);
+        let caller_file = canonical_or_self(file_path);
+        let resolution_fingerprint =
+            self.resolution_fingerprint(&[caller_file.clone(), definition_file.clone()]);
+        self.store.data.definitions.insert(
+            key,
+            CachedDefinition {
+                caller_file,
+                caller_hash: content_hash,
+                callee_span,
+                callee_text,
+                definition_file_hash,
+                resolution_fingerprint,
+                definition_file,
+                definition_line,
+            },
+        );
+        self.store.dirty = true;
     }
 }
 
@@ -1113,6 +1170,61 @@ mod tests {
 
         assert!(resolver.is_assignable_to(&file_path, "ThrownError", "DeclaredError"));
         assert_eq!(calls.get(), 0);
+    }
+
+    #[test]
+    fn definition_batch_preserves_persistent_keys_and_revalidates_between_passes() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let caller = root.join("caller.ts");
+        let target = root.join("nested/target.ts");
+        let config = root.join("nested/tsconfig.json");
+        fs::create_dir_all(target.parent().unwrap()).unwrap();
+        fs::write(&caller, "foo(); foo();").unwrap();
+        fs::write(&target, "export function foo() {}").unwrap();
+        fs::write(&config, "{}").unwrap();
+        let hash = CacheStore::content_hash("foo(); foo();");
+        let spans = [Span { start: 0, end: 3 }, Span { start: 7, end: 10 }];
+        let mut store = CacheStore::load(&root, "workspace".to_string());
+        {
+            let mut batch = store.definitions(&root);
+            for span in spans {
+                batch.update(&caller, hash.clone(), span, "foo".to_string(), (target.clone(), 1));
+                assert_eq!(batch.lookup(&caller, &hash, span, "foo"), Some((target.clone(), 1)));
+            }
+        }
+        let expected = CacheStore::stable_json_hash(&(
+            CacheStore::stable_json_hash(&workspace_resolution_fingerprint_entries(&root)),
+            resolution_fingerprint_entries_for_files_with_workspace_entries(
+                &root,
+                &[caller.clone(), target.clone()],
+                BTreeMap::new(),
+            ),
+        ));
+        for entry in store.data.definitions.values() {
+            assert_eq!(entry.resolution_fingerprint, expected);
+        }
+        store.save().unwrap();
+        let mut store = CacheStore::load(&root, "workspace".to_string());
+        {
+            let mut batch = store.definitions(&root);
+            for span in spans {
+                assert_eq!(batch.lookup(&caller, &hash, span, "foo"), Some((target.clone(), 1)));
+            }
+        }
+        fs::write(&config, r#"{"compilerOptions":{"strict":true}}"#).unwrap();
+        {
+            let mut batch = store.definitions(&root);
+            for span in spans {
+                assert_eq!(batch.lookup(&caller, &hash, span, "foo"), None);
+                batch.update(&caller, hash.clone(), span, "foo".to_string(), (target.clone(), 1));
+            }
+        }
+        fs::write(&target, "export function foo() { throw new Error(); }").unwrap();
+        let mut batch = store.definitions(&root);
+        for span in spans {
+            assert_eq!(batch.lookup(&caller, &hash, span, "foo"), None);
+        }
     }
 
     #[test]

@@ -265,15 +265,13 @@ impl TsServer {
     /// Reload file from disk (discard virtual changes).
     pub fn reload_file(&mut self, file_path: &Path) -> Result<(), TsServerError> {
         let abs_path = file_path.canonicalize().unwrap_or_else(|_| file_path.to_path_buf());
-        let seq = self.send_request("reloadProjects", serde_json::json!({}))?;
-        self.read_response(seq)?;
-
-        let seq =
-            self.send_request("close", serde_json::json!({ "file": abs_path.to_string_lossy() }))?;
-        self.read_response(seq)?;
-
-        let seq =
-            self.send_request("open", serde_json::json!({ "file": abs_path.to_string_lossy() }))?;
+        let seq = self.send_request(
+            "reload",
+            serde_json::json!({
+                "file": abs_path.to_string_lossy(),
+                "tmpfile": abs_path.to_string_lossy()
+            }),
+        )?;
         self.read_response(seq)?;
         Ok(())
     }
@@ -532,6 +530,30 @@ mod tests {
 
         let def = &spans[0];
         assert!(def.file.ends_with("a.ts"), "Definition should point to a.ts, got: {}", def.file);
+    }
+
+    #[test]
+    #[ignore = "requires tsserver installed"]
+    fn test_reload_restores_virtual_edits_between_type_checks() {
+        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("tests/fixtures/errors.ts");
+        let source = std::fs::read_to_string(&fixture).unwrap();
+        let mut server = TsServer::new().expect("tsserver should start");
+        server.open_file(&fixture).unwrap();
+        let original = server.semantic_diagnostics(&fixture).unwrap();
+        let line = TsServerTypeResolver::count_lines(&fixture) + 1;
+        for _ in 0..2 {
+            server.update_open(&fixture, line, 1, "const _restoreProbe: string = 123;\n").unwrap();
+            let changed = server.semantic_diagnostics(&fixture).unwrap();
+            assert!(changed.len() > original.len(), "virtual edit must introduce a type error");
+            server.reload_file(&fixture).unwrap();
+            assert_eq!(server.semantic_diagnostics(&fixture).unwrap(), original);
+        }
+        assert_eq!(std::fs::read_to_string(&fixture).unwrap(), source);
     }
 
     #[test]
