@@ -23,6 +23,7 @@ jobs:
         with:
           command: release-pr
         env:
+          RUSTUP_TOOLCHAIN: stable
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   release-plz-release:
@@ -45,6 +46,7 @@ jobs:
         with:
           command: release
         env:
+          RUSTUP_TOOLCHAIN: stable
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - id: extract
         if: steps.release.outputs.releases_created == 'true'
