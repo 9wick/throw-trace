@@ -68,6 +68,7 @@ impl fmt::Display for FunctionId {
 pub enum ErrorType {
     Named(CompactString),
     Rethrow(CompactString),
+    CapturedRethrow { function: FunctionId, try_span: Span },
     Unknown,
 }
 
@@ -75,7 +76,7 @@ impl ErrorType {
     pub fn type_name(&self) -> Option<&str> {
         match self {
             Self::Named(name) => Some(name.as_str()),
-            Self::Rethrow(_) | Self::Unknown => None,
+            Self::Rethrow(_) | Self::CapturedRethrow { .. } | Self::Unknown => None,
         }
     }
 
@@ -98,7 +99,15 @@ pub struct DeclaredThrow {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CalleeKind {
+    Identifier,
+    Member,
+    Inline,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CallSite {
+    pub callee_kind: CalleeKind,
     pub callee_name: CompactString,
     pub callee_span: Span,
     pub location: Span,
@@ -117,10 +126,25 @@ impl TryCatchBlock {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AnnotationTarget {
+    Declaration { start: u32 },
+    Expression { span: Span },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FunctionKind {
+    Named,
+    Anonymous,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FunctionSignature {
     pub id: FunctionId,
+    pub kind: FunctionKind,
     pub name_span: Span,
+    /// Byte position where the function's `JSDoc` belongs (including export/binding prefixes).
+    pub annotation_target: AnnotationTarget,
     pub declared_throws: Vec<DeclaredThrow>,
     pub direct_throws: Vec<ThrowSite>,
     pub calls: Vec<CallSite>,

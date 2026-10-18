@@ -1,0 +1,2 @@
+description = "無関係な型エラーでError・unknownのthrows宣言を不足扱いしない"
+status = "supported"

@@ -1,6 +1,7 @@
 use crate::{
-    compute_propagated_throws, CallGraph, Diagnostic, ErrorType, FunctionId, FunctionSignature,
-    LspViolation, MethodSignature, PropagatedThrow, TypeParam, TypeRelation, TypeResolver,
+    compute_propagated_throws, CallGraph, Diagnostic, ErrorType, FunctionId, FunctionKind,
+    FunctionSignature, LspViolation, MethodSignature, PropagatedThrow, TypeParam, TypeRelation,
+    TypeResolver,
 };
 use std::collections::HashMap;
 
@@ -29,8 +30,17 @@ pub fn find_missing_declarations<R: TypeResolver, S: std::hash::BuildHasher>(
     signatures: &HashMap<FunctionId, FunctionSignature, S>,
     resolver: &mut R,
 ) -> Vec<PropagatedThrow> {
-    let declared_types: Vec<&str> =
+    if sig.kind == FunctionKind::Anonymous {
+        return Vec::new();
+    }
+    let mut declared_types: Vec<&str> =
         sig.declared_throws.iter().map(|d| d.error_type.as_str()).collect();
+    // Several @throws tags (or constituents of a union) form one allowed type.
+    // A thrown A | B need not be assignable to either constituent on its own.
+    let union = declared_types.iter().map(|ty| format!("({ty})")).collect::<Vec<_>>().join(" | ");
+    if declared_types.len() > 1 {
+        declared_types.push(&union);
+    }
 
     propagated
         .iter()
@@ -106,7 +116,7 @@ fn is_declared_with_resolution<R: TypeResolver>(
                 }
             }
         }
-        ErrorType::Rethrow(_) => (false, None),
+        ErrorType::Rethrow(_) | ErrorType::CapturedRethrow { .. } => (false, None),
     }
 }
 
@@ -158,6 +168,9 @@ pub fn generate_lsp_violations<S: std::hash::BuildHasher, R: TypeResolver>(
     let method_lookup = build_method_lookup(method_signatures);
 
     for (func_id, sig) in signatures {
+        if sig.kind == FunctionKind::Anonymous {
+            continue;
+        }
         // Find the class this function belongs to
         let class_name = extract_class_name_from_signature(func_id, signatures);
         let Some(class_name) = class_name else {
@@ -258,7 +271,7 @@ fn find_illegal_throws<R: TypeResolver>(
                         Some(p.error_type.clone())
                     }
                 }
-                ErrorType::Unknown | ErrorType::Rethrow(_) => {
+                ErrorType::Unknown | ErrorType::Rethrow(_) | ErrorType::CapturedRethrow { .. } => {
                     // Unknown throws are always violations if parent declares nothing or specific types
                     if declared_types.is_empty() {
                         Some(p.error_type.clone())

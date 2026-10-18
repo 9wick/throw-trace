@@ -1,19 +1,20 @@
 use compact_str::CompactString;
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
-    BindingPatternKind, CallExpression, Class, Decorator, Expression, Function, MethodDefinition,
-    Statement, TSInterfaceDeclaration, TSType, TSTypeParameterDeclaration, ThrowStatement,
-    TryStatement,
+    ArrowFunctionExpression, BindingPatternKind, CallExpression, Class, Decorator, Expression,
+    Function, MethodDefinition, Statement, TSInterfaceDeclaration, TSType,
+    TSTypeParameterDeclaration, ThrowStatement, TryStatement,
 };
 use oxc_ast_visit::{walk, Visit};
 use oxc_parser::Parser;
 use oxc_span::{GetSpan, SourceType};
 use oxc_syntax::scope::ScopeFlags;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use throw_trace_core::{
-    CallSite, DeclaredThrow, ErrorType, FunctionId, FunctionSignature, MethodSignature,
-    RelationKind, Span, ThrowSite, TryCatchBlock, TypeId, TypeParam, TypeRelation,
+    AnnotationTarget, CallSite, CalleeKind, DeclaredThrow, ErrorType, FunctionId, FunctionKind,
+    FunctionSignature, MethodSignature, RelationKind, Span, ThrowSite, TryCatchBlock, TypeId,
+    TypeParam, TypeRelation,
 };
 
 use crate::jsdoc::extract_throws_from_jsdoc;
@@ -26,6 +27,13 @@ pub struct ExtractionResult {
     pub type_relations: Vec<TypeRelation>,
 }
 
+struct CatchBinding {
+    name: String,
+    function: Option<usize>,
+    scope_depth: usize,
+    try_span: Span,
+}
+
 struct FunctionExtractor<'a> {
     source: &'a str,
     file_path: &'a Path,
@@ -36,7 +44,8 @@ struct FunctionExtractor<'a> {
     // The last element is the innermost (current) function.
     scope_stack: Vec<usize>,
     // Stack of catch parameter names (e.g., "e" from "catch (e)")
-    catch_param_stack: Vec<String>,
+    catch_param_stack: Vec<CatchBinding>,
+    function_parameters: Vec<HashSet<String>>,
     // Variable name -> type annotation (supports union types as Vec)
     variable_types: HashMap<String, Vec<String>>,
     // Current class context for method extraction
@@ -57,6 +66,7 @@ impl<'a> FunctionExtractor<'a> {
             type_relations: Vec::new(),
             scope_stack: Vec::new(),
             catch_param_stack: Vec::new(),
+            function_parameters: Vec::new(),
             variable_types: HashMap::new(),
             current_class: None,
             hoisted_decorator_spans: std::collections::HashSet::new(),
@@ -87,7 +97,9 @@ impl<'a> FunctionExtractor<'a> {
         let idx = self.signatures.len();
         self.signatures.push(FunctionSignature {
             id,
+            kind: FunctionKind::Named,
             name_span: Span { start: name_span.start, end: name_span.end },
+            annotation_target: AnnotationTarget::Declaration { start: func_span.start },
             declared_throws,
             direct_throws: Vec::new(),
             calls: Vec::new(),
@@ -97,11 +109,35 @@ impl<'a> FunctionExtractor<'a> {
             type_params,
         });
         self.scope_stack.push(idx);
+        self.function_parameters.push(HashSet::new());
         idx
     }
 
     fn end_function(&mut self) {
         self.scope_stack.pop();
+        self.function_parameters.pop();
+    }
+
+    fn record_function_parameters(&mut self, params: &oxc_ast::ast::FormalParameters<'_>) {
+        let mut names = HashSet::new();
+        for param in &params.items {
+            collect_binding_names(&param.pattern, &mut names);
+        }
+        if let Some(rest) = &params.rest {
+            collect_binding_names(&rest.argument, &mut names);
+        }
+        if let Some(current) = self.function_parameters.last_mut() {
+            *current = names;
+        }
+    }
+
+    fn catch_binding(&self, name: &str) -> Option<&CatchBinding> {
+        self.catch_param_stack.iter().rev().find(|binding| {
+            binding.name == name
+                && !self.function_parameters[binding.scope_depth..]
+                    .iter()
+                    .any(|params| params.contains(name))
+        })
     }
 
     // decorator を現在の（method の外側の）スコープで visit し、
@@ -117,6 +153,23 @@ impl<'a> FunctionExtractor<'a> {
 
     fn add_throw(&mut self, throw_stmt: &ThrowStatement<'_>) {
         let location = Span { start: throw_stmt.span.start, end: throw_stmt.span.end };
+
+        if let Expression::Identifier(id) = &throw_stmt.argument {
+            if let Some(binding) = self.catch_binding(id.name.as_str()) {
+                if let Some(owner) = binding.function {
+                    if self.scope_stack.last() != Some(&owner) {
+                        let error_type = ErrorType::CapturedRethrow {
+                            function: self.signatures[owner].id.clone(),
+                            try_span: binding.try_span,
+                        };
+                        if let Some(sig) = self.current_sig_mut() {
+                            sig.direct_throws.push(ThrowSite { location, error_type });
+                        }
+                        return;
+                    }
+                }
+            }
+        }
 
         // Check if throwing a typed variable
         if let Expression::Identifier(id) = &throw_stmt.argument {
@@ -138,7 +191,13 @@ impl<'a> FunctionExtractor<'a> {
         // Fallback to expression analysis
         let snippet =
             self.source[throw_stmt.span.start as usize..throw_stmt.span.end as usize].to_owned();
-        let error_type = analyze_throw_expr_with_catch_params(&snippet, &self.catch_param_stack);
+        let names: Vec<_> = self
+            .catch_param_stack
+            .iter()
+            .filter(|binding| self.catch_binding(&binding.name).is_some())
+            .map(|binding| binding.name.clone())
+            .collect();
+        let error_type = analyze_throw_expr_with_catch_params(&snippet, &names);
         let Some(sig) = self.current_sig_mut() else {
             return;
         };
@@ -153,13 +212,15 @@ impl<'a> FunctionExtractor<'a> {
     }
 
     fn add_call(&mut self, call_expr: &CallExpression<'_>) {
-        let (callee_name, callee_span) = extract_callee_info(&call_expr.callee);
-        let Some(name) = callee_name else { return };
-        let Some(span) = callee_span else { return };
+        let Some((callee_kind, name, span)) = extract_callee_info(self.source, &call_expr.callee)
+        else {
+            return;
+        };
         let Some(sig) = self.current_sig_mut() else {
             return;
         };
         sig.calls.push(CallSite {
+            callee_kind,
             callee_name: name,
             callee_span: Span { start: span.start, end: span.end },
             location: Span { start: call_expr.span.start, end: call_expr.span.end },
@@ -188,6 +249,50 @@ impl<'a> FunctionExtractor<'a> {
             return;
         };
         sig.try_catch_blocks.push(TryCatchBlock { try_span, catch_span, caught_types });
+    }
+
+    fn extract_bound_function(
+        &mut self,
+        declarator: &oxc_ast::ast::VariableDeclarator<'a>,
+        annotation_start: u32,
+    ) -> bool {
+        let BindingPatternKind::BindingIdentifier(id) = &declarator.id.kind else { return false };
+        let comment = preceding_jsdoc(self.source, annotation_start);
+        match &declarator.init {
+            Some(Expression::ArrowFunctionExpression(arrow)) => {
+                let idx = self.begin_function(
+                    id.name.as_str(),
+                    id.span,
+                    arrow.span,
+                    arrow.r#async,
+                    comment.as_deref(),
+                    arrow.type_parameters.as_deref(),
+                );
+                self.signatures[idx].annotation_target =
+                    AnnotationTarget::Declaration { start: annotation_start };
+                self.record_function_parameters(&arrow.params);
+                walk::walk_arrow_function_expression(self, arrow);
+                self.end_function();
+                true
+            }
+            Some(Expression::FunctionExpression(func)) => {
+                let idx = self.begin_function(
+                    id.name.as_str(),
+                    id.span,
+                    func.span,
+                    func.r#async,
+                    comment.as_deref(),
+                    func.type_parameters.as_deref(),
+                );
+                self.signatures[idx].annotation_target =
+                    AnnotationTarget::Declaration { start: annotation_start };
+                self.record_function_parameters(&func.params);
+                walk::walk_function(self, func, ScopeFlags::empty());
+                self.end_function();
+                true
+            }
+            _ => false,
+        }
     }
 
     fn extract_interface(&mut self, iface: &TSInterfaceDeclaration<'_>) {
@@ -311,13 +416,63 @@ impl<'a> FunctionExtractor<'a> {
     }
 }
 
-fn extract_callee_info(expr: &Expression<'_>) -> (Option<CompactString>, Option<oxc_span::Span>) {
-    match expr {
-        Expression::Identifier(id) => (Some(id.name.as_str().into()), Some(id.span)),
-        Expression::StaticMemberExpression(member) => {
-            (Some(member.property.name.as_str().into()), Some(member.property.span))
+fn collect_binding_names(pattern: &oxc_ast::ast::BindingPattern<'_>, names: &mut HashSet<String>) {
+    match &pattern.kind {
+        BindingPatternKind::BindingIdentifier(id) => {
+            names.insert(id.name.to_string());
         }
-        _ => (None, None),
+        BindingPatternKind::AssignmentPattern(assignment) => {
+            collect_binding_names(&assignment.left, names);
+        }
+        BindingPatternKind::ObjectPattern(object) => {
+            for property in &object.properties {
+                collect_binding_names(&property.value, names);
+            }
+            if let Some(rest) = &object.rest {
+                collect_binding_names(&rest.argument, names);
+            }
+        }
+        BindingPatternKind::ArrayPattern(array) => {
+            for element in array.elements.iter().flatten() {
+                collect_binding_names(element, names);
+            }
+            if let Some(rest) = &array.rest {
+                collect_binding_names(&rest.argument, names);
+            }
+        }
+    }
+}
+
+fn anonymous_name(source: &str, span: oxc_span::Span) -> CompactString {
+    let (line, _) = crate::tsserver::byte_offset_to_line_col(source, span.start);
+    format!("anonymous_L{line}").into()
+}
+
+fn extract_callee_info(
+    source: &str,
+    expr: &Expression<'_>,
+) -> Option<(CalleeKind, CompactString, oxc_span::Span)> {
+    match expr {
+        Expression::Identifier(id) => {
+            Some((CalleeKind::Identifier, id.name.as_str().into(), id.span))
+        }
+        Expression::StaticMemberExpression(member) => {
+            Some((CalleeKind::Member, member.property.name.as_str().into(), member.property.span))
+        }
+        Expression::ArrowFunctionExpression(arrow) => {
+            Some((CalleeKind::Inline, anonymous_name(source, arrow.span), arrow.span))
+        }
+        Expression::FunctionExpression(func) => Some((
+            CalleeKind::Inline,
+            func.id
+                .as_ref()
+                .map_or_else(|| anonymous_name(source, func.span), |id| id.name.as_str().into()),
+            func.span,
+        )),
+        Expression::ParenthesizedExpression(paren) => {
+            extract_callee_info(source, &paren.expression)
+        }
+        _ => None,
     }
 }
 
@@ -563,7 +718,7 @@ impl<'a> Visit<'a> for FunctionExtractor<'a> {
         if let Some(id) = &func.id {
             // Look for a preceding JSDoc comment via the raw source
             let comment = preceding_jsdoc(self.source, func.span.start);
-            self.begin_function(
+            let idx = self.begin_function(
                 id.name.as_str(),
                 id.span,
                 func.span,
@@ -571,34 +726,64 @@ impl<'a> Visit<'a> for FunctionExtractor<'a> {
                 comment.as_deref(),
                 func.type_parameters.as_deref(),
             );
+            if func.r#type == oxc_ast::ast::FunctionType::FunctionExpression {
+                self.signatures[idx].annotation_target = AnnotationTarget::Expression {
+                    span: Span { start: func.span.start, end: func.span.end },
+                };
+            }
+            self.record_function_parameters(&func.params);
             walk::walk_function(self, func, flags);
             self.end_function();
         } else {
-            // Anonymous function: still walk but don't create a signature
+            let name = anonymous_name(self.source, func.span);
+            let comment = preceding_jsdoc(self.source, func.span.start);
+            let idx = self.begin_function(
+                &name,
+                func.span,
+                func.span,
+                func.r#async,
+                comment.as_deref(),
+                func.type_parameters.as_deref(),
+            );
+            if func.id.is_none() {
+                self.signatures[idx].kind = FunctionKind::Anonymous;
+            }
+            if func.r#type == oxc_ast::ast::FunctionType::FunctionExpression {
+                self.signatures[idx].annotation_target = AnnotationTarget::Expression {
+                    span: Span { start: func.span.start, end: func.span.end },
+                };
+            }
+            self.record_function_parameters(&func.params);
             walk::walk_function(self, func, flags);
+            self.end_function();
         }
+    }
+
+    fn visit_arrow_function_expression(&mut self, arrow: &ArrowFunctionExpression<'a>) {
+        let name = anonymous_name(self.source, arrow.span);
+        let comment = preceding_jsdoc(self.source, arrow.span.start);
+        let idx = self.begin_function(
+            &name,
+            arrow.span,
+            arrow.span,
+            arrow.r#async,
+            comment.as_deref(),
+            arrow.type_parameters.as_deref(),
+        );
+        self.signatures[idx].kind = FunctionKind::Anonymous;
+        self.signatures[idx].annotation_target = AnnotationTarget::Expression {
+            span: Span { start: arrow.span.start, end: arrow.span.end },
+        };
+        self.record_function_parameters(&arrow.params);
+        walk::walk_arrow_function_expression(self, arrow);
+        self.end_function();
     }
 
     fn visit_export_named_declaration(&mut self, decl: &oxc_ast::ast::ExportNamedDeclaration<'a>) {
         match &decl.declaration {
             Some(oxc_ast::ast::Declaration::VariableDeclaration(var_decl)) => {
                 for declarator in &var_decl.declarations {
-                    if let Some(Expression::ArrowFunctionExpression(arrow)) = &declarator.init {
-                        if let BindingPatternKind::BindingIdentifier(id) = &declarator.id.kind {
-                            let comment = preceding_jsdoc(self.source, decl.span.start);
-                            self.begin_function(
-                                id.name.as_str(),
-                                id.span,
-                                arrow.span,
-                                arrow.r#async,
-                                comment.as_deref(),
-                                arrow.type_parameters.as_deref(),
-                            );
-                            walk::walk_arrow_function_expression(self, arrow);
-                            self.end_function();
-                        } else {
-                            walk::walk_arrow_function_expression(self, arrow);
-                        }
+                    if self.extract_bound_function(declarator, decl.span.start) {
                         continue;
                     }
                     walk::walk_variable_declarator(self, declarator);
@@ -607,7 +792,7 @@ impl<'a> Visit<'a> for FunctionExtractor<'a> {
             Some(oxc_ast::ast::Declaration::FunctionDeclaration(func)) => {
                 if let Some(id) = &func.id {
                     let comment = preceding_jsdoc(self.source, decl.span.start);
-                    self.begin_function(
+                    let idx = self.begin_function(
                         id.name.as_str(),
                         id.span,
                         func.span,
@@ -615,9 +800,13 @@ impl<'a> Visit<'a> for FunctionExtractor<'a> {
                         comment.as_deref(),
                         func.type_parameters.as_deref(),
                     );
+                    self.signatures[idx].annotation_target =
+                        AnnotationTarget::Declaration { start: decl.span.start };
+                    self.record_function_parameters(&func.params);
                     walk::walk_function(self, func, ScopeFlags::empty());
                     self.end_function();
                 } else {
+                    self.record_function_parameters(&func.params);
                     walk::walk_function(self, func, ScopeFlags::empty());
                 }
             }
@@ -636,23 +825,7 @@ impl<'a> Visit<'a> for FunctionExtractor<'a> {
                 }
             }
 
-            if let Some(Expression::ArrowFunctionExpression(arrow)) = &declarator.init {
-                if let BindingPatternKind::BindingIdentifier(id) = &declarator.id.kind {
-                    let comment = preceding_jsdoc(self.source, decl.span.start);
-                    self.begin_function(
-                        id.name.as_str(),
-                        id.span,
-                        arrow.span,
-                        arrow.r#async,
-                        comment.as_deref(),
-                        arrow.type_parameters.as_deref(),
-                    );
-                    walk::walk_arrow_function_expression(self, arrow);
-                    self.end_function();
-                } else {
-                    walk::walk_arrow_function_expression(self, arrow);
-                }
-                // Skip the default variable walk for this declarator to avoid re-entering
+            if self.extract_bound_function(declarator, decl.span.start) {
                 continue;
             }
             walk::walk_variable_declarator(self, declarator);
@@ -666,6 +839,23 @@ impl<'a> Visit<'a> for FunctionExtractor<'a> {
 
     fn visit_call_expression(&mut self, expr: &CallExpression<'a>) {
         self.add_call(expr);
+        // Preserve the existing conservative treatment of callbacks passed to calls.
+        // Returning a callback creates no such edge; it does not execute the body.
+        for argument in &expr.arguments {
+            let Some(argument) = argument.as_expression() else { continue };
+            let Some((CalleeKind::Inline, name, span)) = extract_callee_info(self.source, argument)
+            else {
+                continue;
+            };
+            if let Some(sig) = self.current_sig_mut() {
+                sig.calls.push(CallSite {
+                    callee_kind: CalleeKind::Inline,
+                    callee_name: name,
+                    callee_span: Span { start: span.start, end: span.end },
+                    location: Span { start: expr.span.start, end: expr.span.end },
+                });
+            }
+        }
         walk::walk_call_expression(self, expr);
     }
 
@@ -686,7 +876,12 @@ impl<'a> Visit<'a> for FunctionExtractor<'a> {
             });
 
             if let Some(param) = &catch_param {
-                self.catch_param_stack.push(param.clone());
+                self.catch_param_stack.push(CatchBinding {
+                    name: param.clone(),
+                    function: self.scope_stack.last().copied(),
+                    scope_depth: self.scope_stack.len(),
+                    try_span: Span { start: stmt.block.span.start, end: stmt.block.span.end },
+                });
             }
 
             walk::walk_block_statement(self, &handler.body);
@@ -751,7 +946,8 @@ impl<'a> Visit<'a> for FunctionExtractor<'a> {
             comment.as_deref(),
             method.value.type_parameters.as_deref(),
         );
-        walk::walk_method_definition(self, method);
+        self.record_function_parameters(&method.value.params);
+        walk::walk_function(self, &method.value, ScopeFlags::empty());
         self.end_function();
     }
 

@@ -6,12 +6,8 @@
 class CustomError extends Error {}
 
 // --- executor 内で throw ---
-// executor 内の throw はコールバックの throw として検出・伝播される。
-// 注: 実際の runtime では Promise が reject に変換するため throw としては飛ばないが、
-//     現状は sync throw と同じ扱いで伝播する（結果的に正しい報告）。
-/**
- * @throws {CustomError} from 26_promise_constructor.ts:promiseWithThrow
- */
+// executor 内の throw は Promise が rejection に変換する。
+// 外側の同期 throw としては伝播しない。匿名 executor 自身への宣言も必須にしない。
 function promiseWithThrow() {
   return new Promise((resolve) => {
     throw new CustomError();

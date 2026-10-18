@@ -1,0 +1,2 @@
+description = "catch変数の例外型を内側の即時実行関数へ引き継ぐ"
+status = "supported"

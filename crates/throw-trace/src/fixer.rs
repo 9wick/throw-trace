@@ -3,7 +3,7 @@ use anyhow::Result;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
-use throw_trace_core::{ErrorType, FunctionId, PropagatedThrow};
+use throw_trace_core::{AnnotationTarget, ErrorType, FunctionId, PropagatedThrow};
 
 pub fn fix_files(contracts: &[ThrowContract]) -> Result<usize> {
     let grouped = group_by_file(contracts);
@@ -26,62 +26,24 @@ fn group_by_file(contracts: &[ThrowContract]) -> HashMap<PathBuf, Vec<&ThrowCont
     grouped
 }
 
-enum Modification {
-    Insert { line: usize, content: Vec<String> },
-    Replace { start_line: usize, end_line: usize, content: Vec<String> },
+struct Modification {
+    start: usize,
+    end: usize,
+    content: String,
 }
 
 fn apply_fixes(file_path: &PathBuf, contracts: &[&ThrowContract]) -> Result<bool> {
-    let raw = fs::read_to_string(file_path)?;
-    // BOM は span のオフセットに含まれるため、剥がした分を行検索時に補正する
-    let bom = if raw.starts_with('\u{FEFF}') { "\u{FEFF}" } else { "" };
-    let source = &raw[bom.len()..];
+    let source = fs::read_to_string(file_path)?;
     let newline = if source.contains("\r\n") { "\r\n" } else { "\n" };
-    let had_trailing_newline = source.ends_with('\n');
-    let lines: Vec<&str> = source.lines().collect();
-
-    #[allow(clippy::cast_possible_truncation)]
-    let bom_len = bom.len() as u32;
-    let mut modifications = collect_modifications(source, &lines, bom_len, contracts);
+    let mut modifications = collect_modifications(&source, newline, contracts);
     if modifications.is_empty() {
         return Ok(false);
     }
 
-    modifications.sort_by(|a, b| {
-        let line_a = match a {
-            Modification::Insert { line, .. } => *line,
-            Modification::Replace { start_line, .. } => *start_line,
-        };
-        let line_b = match b {
-            Modification::Insert { line, .. } => *line,
-            Modification::Replace { start_line, .. } => *start_line,
-        };
-        line_b.cmp(&line_a)
-    });
-
-    let mut result_lines: Vec<String> = lines.iter().map(|s| (*s).to_string()).collect();
-
-    for modification in modifications {
-        match modification {
-            Modification::Insert { line, content } => {
-                let indent = detect_indent(&result_lines, line);
-                let formatted: Vec<String> =
-                    content.iter().map(|l| format!("{indent}{l}")).collect();
-                for (i, formatted_line) in formatted.into_iter().enumerate() {
-                    result_lines.insert(line + i, formatted_line);
-                }
-            }
-            Modification::Replace { start_line, end_line, content } => {
-                result_lines.splice(start_line..=end_line, content);
-            }
-        }
-    }
-
-    let mut output = String::with_capacity(raw.len());
-    output.push_str(bom);
-    output.push_str(&result_lines.join(newline));
-    if had_trailing_newline {
-        output.push_str(newline);
+    modifications.sort_by_key(|edit| std::cmp::Reverse(edit.start));
+    let mut output = source;
+    for edit in modifications {
+        output.replace_range(edit.start..edit.end, &edit.content);
     }
     fs::write(file_path, output)?;
     Ok(true)
@@ -89,90 +51,94 @@ fn apply_fixes(file_path: &PathBuf, contracts: &[&ThrowContract]) -> Result<bool
 
 fn collect_modifications(
     source: &str,
-    lines: &[&str],
-    bom_len: u32,
+    newline: &str,
     contracts: &[&ThrowContract],
 ) -> Vec<Modification> {
     let mut modifications = Vec::new();
-
     for contract in contracts {
-        let func_line =
-            find_function_line(source, contract.function.span.start.saturating_sub(bom_len));
-        let Some(func_line) = func_line else {
-            continue;
+        let anchor = match contract.annotation_target {
+            AnnotationTarget::Declaration { start } => start,
+            AnnotationTarget::Expression { span } => span.start,
+        } as usize;
+        let before = &source[..anchor];
+        let line_start = before.rfind('\n').map_or(0, |pos| pos + 1);
+        // Keep a BOM outside every replacement, including edits on the first line.
+        let line_start = if line_start == 0 && source.starts_with('\u{FEFF}') {
+            '\u{FEFF}'.len_utf8()
+        } else {
+            line_start
         };
-
+        let line_end = source[line_start..].find('\n').map_or(source.len(), |pos| line_start + pos);
+        let indent = leading_whitespace(&source[line_start..line_end]);
         let throws_entries = generate_throws_entries(&contract.required_throws);
 
-        if let Some((start_line, end_line)) = find_jsdoc_range(lines, func_line) {
+        if let Some((start, end)) = preceding_jsdoc_range(source, anchor) {
+            let comment_line =
+                source[..start].rfind('\n').map_or(line_start.min(start), |pos| pos + 1);
+            let standalone = source[comment_line..start].trim().is_empty();
+            let edit_start = if standalone { comment_line } else { start };
             let existing: Vec<String> =
-                lines[start_line..=end_line].iter().map(|line| (*line).to_string()).collect();
-            let content = sync_jsdoc(&existing, &throws_entries);
-            if content != existing {
-                modifications.push(Modification::Replace { start_line, end_line, content });
+                source[edit_start..end].lines().map(str::to_owned).collect();
+            let synced = sync_jsdoc(&existing, &throws_entries);
+            let mut content = synced.join(newline);
+            if content != source[edit_start..end] {
+                let edit_end =
+                    if content.is_empty() && standalone && source[end..].starts_with(newline) {
+                        end + newline.len()
+                    } else {
+                        end
+                    };
+                if content.contains('\n') && !standalone {
+                    if let AnnotationTarget::Expression { span } = contract.annotation_target {
+                        content.insert(0, '(');
+                        let end = span.end as usize;
+                        modifications.push(Modification {
+                            start: end,
+                            end,
+                            content: ")".to_string(),
+                        });
+                    }
+                }
+                modifications.push(Modification { start: edit_start, end: edit_end, content });
             }
         } else if !throws_entries.is_empty() {
-            let mut comment = vec!["/**".to_string()];
-            for entry in throws_entries {
-                comment.push(format!(" * {}", entry.text));
+            let entries: Vec<_> = throws_entries.iter().collect();
+            let standalone = source[line_start..anchor].trim().is_empty();
+            let start = if standalone { line_start } else { anchor };
+            let mut comment = generated_jsdoc(indent, &entries);
+            if !standalone {
+                comment[0] = "/**".to_string();
             }
-            comment.push(" */".to_string());
-            modifications.push(Modification::Insert { line: func_line, content: comment });
+            let mut content = comment.join(newline);
+            content.push_str(newline);
+            if !standalone {
+                content.push_str(indent);
+                // A newline after `return` changes its meaning through ASI, even
+                // inside a comment. Parentheses keep the annotated expression attached.
+                if matches!(contract.annotation_target, AnnotationTarget::Expression { .. }) {
+                    content.insert(0, '(');
+                    if let AnnotationTarget::Expression { span } = contract.annotation_target {
+                        let end = span.end as usize;
+                        modifications.push(Modification {
+                            start: end,
+                            end,
+                            content: ")".to_string(),
+                        });
+                    }
+                }
+            }
+            modifications.push(Modification { start, end: start, content });
         }
     }
-
     modifications
 }
 
-// オフセットより前にある改行を直接数えることで、CRLF/LF 混在でもずれない
-fn find_function_line(source: &str, byte_offset: u32) -> Option<usize> {
-    let offset = byte_offset as usize;
-    if offset > source.len() {
+fn preceding_jsdoc_range(source: &str, anchor: usize) -> Option<(usize, usize)> {
+    let trimmed = source[..anchor].trim_end();
+    if !trimmed.ends_with("*/") {
         return None;
     }
-    Some(source[..offset].matches('\n').count())
-}
-
-fn find_jsdoc_range(lines: &[&str], func_line: usize) -> Option<(usize, usize)> {
-    if func_line == 0 {
-        return None;
-    }
-
-    let mut end_line = None;
-    for i in (0..func_line).rev() {
-        let trimmed = lines[i].trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        if trimmed.ends_with("*/") {
-            end_line = Some(i);
-            break;
-        }
-        return None;
-    }
-
-    let end_line = end_line?;
-
-    for i in (0..=end_line).rev() {
-        let trimmed = lines[i].trim();
-        if trimmed.starts_with("/**") {
-            return Some((i, end_line));
-        }
-        if trimmed.starts_with("/*") && !trimmed.starts_with("/**") {
-            return None;
-        }
-    }
-    None
-}
-
-fn detect_indent(lines: &[String], line_idx: usize) -> String {
-    if line_idx >= lines.len() {
-        return String::new();
-    }
-
-    let line = &lines[line_idx];
-    let trimmed_len = line.trim_start().len();
-    line[..line.len() - trimmed_len].to_string()
+    Some((trimmed.rfind("/**")?, trimmed.len()))
 }
 
 struct ThrowsEntry {
@@ -187,7 +153,7 @@ fn generate_throws_entries(required_throws: &[PropagatedThrow]) -> Vec<ThrowsEnt
         .filter_map(|throw| {
             let type_name = match &throw.error_type {
                 ErrorType::Named(name) | ErrorType::Rethrow(name) => name.as_str(),
-                ErrorType::Unknown => "unknown",
+                ErrorType::Unknown | ErrorType::CapturedRethrow { .. } => "unknown",
             };
             if !seen.insert(type_name.to_string()) {
                 return None;
@@ -213,13 +179,16 @@ fn sync_jsdoc(existing: &[String], desired: &[ThrowsEntry]) -> Vec<String> {
             continue;
         };
 
-        let is_desired = desired_types.contains(declaration.type_name.as_str());
-        if declaration.manual {
-            if is_desired {
-                matched.insert(declaration.type_name.clone());
-            }
-            result.push(line.clone());
-        } else if is_desired && matched.insert(declaration.type_name) {
+        let desired: Vec<_> = declaration
+            .type_names
+            .iter()
+            .filter(|name| desired_types.contains(name.as_str()))
+            .collect();
+        if declaration.manual
+            || (desired.len() == declaration.type_names.len()
+                && desired.iter().any(|name| !matched.contains(name.as_str())))
+        {
+            matched.extend(desired.into_iter().cloned());
             result.push(line.clone());
         }
     }
@@ -240,28 +209,17 @@ fn sync_jsdoc(existing: &[String], desired: &[ThrowsEntry]) -> Vec<String> {
 }
 
 struct ParsedThrowsDeclaration {
-    type_name: String,
+    type_names: Vec<String>,
     manual: bool,
 }
 
 fn parse_throws_declaration(line: &str) -> Option<ParsedThrowsDeclaration> {
-    let tag_start = line.find("@throws")?;
-    let after_tag = line[tag_start + "@throws".len()..].trim_start();
-    let type_start = after_tag.strip_prefix('{')?;
-    let type_end = type_start.find('}')?;
-    let type_name = type_start[..type_end].trim();
-    if type_name.is_empty() {
-        return None;
-    }
-
-    let remainder = type_start[type_end + 1..]
-        .trim()
-        .strip_suffix("*/")
-        .unwrap_or_else(|| type_start[type_end + 1..].trim())
-        .trim();
-    let manual = !remainder.is_empty() && !remainder.starts_with("from ");
-
-    Some(ParsedThrowsDeclaration { type_name: type_name.to_string(), manual })
+    let declarations = throw_trace_ts::extract_throws_from_jsdoc(line);
+    let manual = declarations.first()?.description.is_some();
+    Some(ParsedThrowsDeclaration {
+        type_names: declarations.into_iter().map(|decl| decl.type_name).collect(),
+        manual,
+    })
 }
 
 fn has_jsdoc_content(lines: &[String]) -> bool {

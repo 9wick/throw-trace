@@ -25,14 +25,12 @@ pub fn extract_throws_from_jsdoc(comment: &str) -> Vec<ThrowsDeclaration> {
         let rest = trimmed.strip_prefix("@throws").unwrap_or("").trim();
 
         if rest.starts_with('{') {
-            if let Some(end_brace) = rest.find('}') {
-                let type_content = &rest[1..end_brace];
-                let after_type = strip_jsdoc_end(rest[end_brace + 1..].trim());
+            if let Some((type_content, after)) = braced_type(rest) {
+                let after_type = strip_jsdoc_end(after.trim());
                 let (description, from) = parse_description_and_from(after_type);
 
-                for type_part in type_content.split('|') {
-                    let type_name = type_part.trim().to_string();
-                    if !type_name.is_empty() {
+                if let Some(types) = split_throw_types(type_content) {
+                    for type_name in types {
                         results.push(ThrowsDeclaration {
                             type_name,
                             description: description.clone(),
@@ -53,6 +51,62 @@ pub fn extract_throws_from_jsdoc(comment: &str) -> Vec<ThrowsDeclaration> {
     }
 
     results
+}
+
+fn braced_type(text: &str) -> Option<(&str, &str)> {
+    let mut depth = 0;
+    let mut quote = None;
+    let mut escaped = false;
+    for (offset, ch) in text.char_indices() {
+        if let Some(delimiter) = quote {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == delimiter {
+                quote = None;
+            }
+            continue;
+        }
+        match ch {
+            '\'' | '"' | '`' => quote = Some(ch),
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some((&text[1..offset], &text[offset + 1..]));
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+pub(crate) fn split_throw_types(content: &str) -> Option<Vec<String>> {
+    use oxc_ast::ast::{Statement, TSType};
+    use oxc_span::GetSpan;
+
+    let source = format!("type __Throws = {content};");
+    let allocator = oxc_allocator::Allocator::default();
+    let parsed = oxc_parser::Parser::new(&allocator, &source, oxc_span::SourceType::ts()).parse();
+    if !parsed.errors.is_empty() || parsed.program.body.len() != 1 {
+        return None;
+    }
+    let Statement::TSTypeAliasDeclaration(alias) = parsed.program.body.first()? else {
+        return None;
+    };
+    let types = if let TSType::TSUnionType(union) = &alias.type_annotation {
+        union.types.iter().map(GetSpan::span).collect()
+    } else {
+        vec![alias.type_annotation.span()]
+    };
+    Some(
+        types
+            .into_iter()
+            .map(|span| source[span.start as usize..span.end as usize].to_owned())
+            .collect(),
+    )
 }
 
 fn strip_jsdoc_end(text: &str) -> &str {
@@ -154,5 +208,32 @@ mod tests {
         assert_eq!(result[0].type_name, "Error");
         assert_eq!(result[0].description, Some("when reading from disk".to_string()));
         assert!(result[0].from.is_none());
+    }
+
+    #[test]
+    fn nested_types_preserve_braces_and_internal_unions() {
+        let result = extract_throws_from_jsdoc("/** @throws {Error | { code: 'a|b}'; detail: { value: string | number } } | null} details */");
+        assert_eq!(
+            result.iter().map(|decl| decl.type_name.as_str()).collect::<Vec<_>>(),
+            ["Error", "{ code: 'a|b}'; detail: { value: string | number } }", "null"]
+        );
+        assert!(result.iter().all(|decl| decl.description.as_deref() == Some("details")));
+    }
+
+    #[test]
+    fn function_and_generic_types_are_not_split_at_nested_unions() {
+        let result = extract_throws_from_jsdoc(
+            "/** @throws {(() => Error | null) | Promise<Error | null> | {}} */",
+        );
+        assert_eq!(
+            result.iter().map(|decl| decl.type_name.as_str()).collect::<Vec<_>>(),
+            ["(() => Error | null)", "Promise<Error | null>", "{}"]
+        );
+    }
+
+    #[test]
+    fn malformed_type_does_not_satisfy_a_throws_contract() {
+        assert!(extract_throws_from_jsdoc("/** @throws {{ incomplete */").is_empty());
+        assert!(extract_throws_from_jsdoc("/** @throws {Error | } */").is_empty());
     }
 }

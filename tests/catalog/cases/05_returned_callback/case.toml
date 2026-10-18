@@ -1,0 +1,2 @@
+description = "返却コールバックの例外をファクトリへ帰属させない"
+status = "supported"

@@ -11,7 +11,7 @@ use throw_trace_core::{
 
 // Skeleton APIs are wired into Analyzer in later persistent-cache tasks.
 #[allow(dead_code)]
-pub const CACHE_SCHEMA_VERSION: u32 = 1;
+pub const CACHE_SCHEMA_VERSION: u32 = 3;
 
 // Skeleton APIs are wired into Analyzer in later persistent-cache tasks.
 #[allow(dead_code)]
@@ -75,6 +75,7 @@ pub struct CachedDefinition {
     #[serde(default)]
     pub resolution_fingerprint: String,
     pub definition_line: u32,
+    pub definition_offset: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -331,7 +332,7 @@ impl CacheStore {
         content_hash: &str,
         callee_span: Span,
         callee_text: &str,
-    ) -> Option<(PathBuf, u32)> {
+    ) -> Option<(PathBuf, u32, u32)> {
         self.definitions(workspace_root).lookup(file_path, content_hash, callee_span, callee_text)
     }
 
@@ -342,7 +343,7 @@ impl CacheStore {
         content_hash: String,
         callee_span: Span,
         callee_text: String,
-        definition: (PathBuf, u32),
+        definition: (PathBuf, u32, u32),
     ) {
         self.definitions(workspace_root).update(
             file_path,
@@ -454,7 +455,7 @@ impl DefinitionCache<'_> {
         content_hash: &str,
         callee_span: Span,
         callee_text: &str,
-    ) -> Option<(PathBuf, u32)> {
+    ) -> Option<(PathBuf, u32, u32)> {
         let key = CacheStore::definition_key(file_path, content_hash, callee_span, callee_text);
         let entry = self.store.data.definitions.get(&key)?.clone();
         let definition_file_hash = self.file_hash(&entry.definition_file)?;
@@ -466,7 +467,7 @@ impl DefinitionCache<'_> {
             && entry.definition_file_hash == definition_file_hash
             && entry.resolution_fingerprint == resolution_fingerprint
         {
-            Some((entry.definition_file, entry.definition_line))
+            Some((entry.definition_file, entry.definition_line, entry.definition_offset))
         } else {
             None
         }
@@ -478,9 +479,9 @@ impl DefinitionCache<'_> {
         content_hash: String,
         callee_span: Span,
         callee_text: String,
-        definition: (PathBuf, u32),
+        definition: (PathBuf, u32, u32),
     ) {
-        let (definition_file, definition_line) = definition;
+        let (definition_file, definition_line, definition_offset) = definition;
         let Some(definition_file_hash) = self.file_hash(&definition_file) else {
             return;
         };
@@ -499,6 +500,7 @@ impl DefinitionCache<'_> {
                 resolution_fingerprint,
                 definition_file,
                 definition_line,
+                definition_offset,
             },
         );
         self.store.dirty = true;
@@ -1189,8 +1191,14 @@ mod tests {
         {
             let mut batch = store.definitions(&root);
             for span in spans {
-                batch.update(&caller, hash.clone(), span, "foo".to_string(), (target.clone(), 1));
-                assert_eq!(batch.lookup(&caller, &hash, span, "foo"), Some((target.clone(), 1)));
+                batch.update(
+                    &caller,
+                    hash.clone(),
+                    span,
+                    "foo".to_string(),
+                    (target.clone(), 1, 1),
+                );
+                assert_eq!(batch.lookup(&caller, &hash, span, "foo"), Some((target.clone(), 1, 1)));
             }
         }
         let expected = CacheStore::stable_json_hash(&(
@@ -1209,7 +1217,7 @@ mod tests {
         {
             let mut batch = store.definitions(&root);
             for span in spans {
-                assert_eq!(batch.lookup(&caller, &hash, span, "foo"), Some((target.clone(), 1)));
+                assert_eq!(batch.lookup(&caller, &hash, span, "foo"), Some((target.clone(), 1, 1)));
             }
         }
         fs::write(&config, r#"{"compilerOptions":{"strict":true}}"#).unwrap();
@@ -1217,7 +1225,13 @@ mod tests {
             let mut batch = store.definitions(&root);
             for span in spans {
                 assert_eq!(batch.lookup(&caller, &hash, span, "foo"), None);
-                batch.update(&caller, hash.clone(), span, "foo".to_string(), (target.clone(), 1));
+                batch.update(
+                    &caller,
+                    hash.clone(),
+                    span,
+                    "foo".to_string(),
+                    (target.clone(), 1, 1),
+                );
             }
         }
         fs::write(&target, "export function foo() { throw new Error(); }").unwrap();
@@ -1246,12 +1260,12 @@ mod tests {
             content_hash.clone(),
             span,
             "foo".to_string(),
-            (definition_file.clone(), 1),
+            (definition_file.clone(), 1, 1),
         );
 
         assert_eq!(
             store.lookup_definition(temp_dir.path(), &caller_file, &content_hash, span, "foo"),
-            Some((definition_file, 1))
+            Some((definition_file, 1, 1))
         );
     }
 
@@ -1274,7 +1288,7 @@ mod tests {
             content_hash.clone(),
             span,
             "foo".to_string(),
-            (definition_file.clone(), 1),
+            (definition_file.clone(), 1, 1),
         );
         fs::write(&definition_file, "function foo() { return 1; }")
             .expect("definition should be updated");
@@ -1309,11 +1323,11 @@ mod tests {
             content_hash.clone(),
             span,
             "foo".to_string(),
-            (definition_file.clone(), 1),
+            (definition_file.clone(), 1, 1),
         );
         assert_eq!(
             store.lookup_definition(temp_dir.path(), &caller_file, &content_hash, span, "foo"),
-            Some((definition_file.clone(), 1))
+            Some((definition_file.clone(), 1, 1))
         );
 
         fs::write(&definition_tsconfig, r#"{"compilerOptions":{"paths":{"@/*":["src/*"]}}}"#)
@@ -1587,11 +1601,11 @@ mod tests {
             content_hash.clone(),
             span,
             "foo".to_string(),
-            (definition_file.clone(), 1),
+            (definition_file.clone(), 1, 1),
         );
         assert_eq!(
             store.lookup_definition(temp_dir.path(), &caller_file, &content_hash, span, "foo"),
-            Some((definition_file.clone(), 1))
+            Some((definition_file.clone(), 1, 1))
         );
 
         fs::write(&base_config, r#"{"compilerOptions":{"baseUrl":"lib"}}"#)
@@ -1630,11 +1644,11 @@ mod tests {
             content_hash.clone(),
             span,
             "foo".to_string(),
-            (definition_file.clone(), 1),
+            (definition_file.clone(), 1, 1),
         );
         assert_eq!(
             store.lookup_definition(temp_dir.path(), &caller_file, &content_hash, span, "foo"),
-            Some((definition_file.clone(), 1))
+            Some((definition_file.clone(), 1, 1))
         );
 
         fs::write(&base_config, r#"{"compilerOptions":{"baseUrl":"lib"}}"#)
@@ -1799,6 +1813,7 @@ mod tests {
                 definition_file_hash: "definition-hash".to_string(),
                 resolution_fingerprint: "resolution-fingerprint".to_string(),
                 definition_line: 1,
+                definition_offset: 1,
             },
         );
         cache.diagnostics.insert(
@@ -1836,6 +1851,7 @@ mod tests {
                 definition_file_hash: "definition-hash".to_string(),
                 resolution_fingerprint: "resolution-fingerprint".to_string(),
                 definition_line: 1,
+                definition_offset: 1,
             },
         );
         cache.diagnostics.insert(
