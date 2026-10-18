@@ -1,0 +1,2 @@
+description = "構造型の波括弧とトップレベルunionを維持して同期する"
+status = "supported"

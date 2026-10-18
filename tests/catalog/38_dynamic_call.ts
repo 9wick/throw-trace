@@ -30,8 +30,8 @@ function computedCall(obj: Record<string, () => void>, key: string) {
 }
 
 // --- destructured method ---
-// 分割代入しても callee name ("find") でマッチするため伝播する。
-// 注: 名前ベースマッチなので、同名の別関数と混同する可能性あり。
+// [FALSE NEGATIVE] tsserver の定義が分割代入の binding を指す場合は、
+// 元メソッドの実装へ辿れない。同名メソッドへの推測による接続は行わない。
 
 class Repo {
   /** @throws {DynError} */

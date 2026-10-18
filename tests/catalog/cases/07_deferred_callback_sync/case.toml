@@ -1,0 +1,2 @@
+description = "ファクトリの誤った生成宣言を削除し匿名コールバックへ追加しない"
+status = "supported"

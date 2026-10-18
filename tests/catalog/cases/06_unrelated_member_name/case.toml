@@ -1,0 +1,2 @@
+description = "メソッドを別スコープの同名関数へ接続しない"
+status = "supported"

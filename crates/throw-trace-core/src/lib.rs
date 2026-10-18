@@ -11,9 +11,10 @@ pub use diagnostic::{
 };
 pub use propagation::compute_propagated_throws;
 pub use types::{
-    CallSite, DeclaredThrow, Diagnostic, ErrorType, FunctionId, FunctionSignature, LspViolation,
-    MethodSignature, NoOpTypeResolver, PropagatedThrow, RelationKind, Span, ThrowSite,
-    TryCatchBlock, TypeId, TypeParam, TypeRelation, TypeResolver,
+    AnnotationTarget, CallSite, CalleeKind, DeclaredThrow, Diagnostic, ErrorType, FunctionId,
+    FunctionKind, FunctionSignature, LspViolation, MethodSignature, NoOpTypeResolver,
+    PropagatedThrow, RelationKind, Span, ThrowSite, TryCatchBlock, TypeId, TypeParam, TypeRelation,
+    TypeResolver,
 };
 
 #[cfg(test)]
@@ -74,6 +75,7 @@ mod tests {
     #[test]
     fn call_site_creation() {
         let call = CallSite {
+            callee_kind: CalleeKind::Identifier,
             callee_name: "validate".into(),
             callee_span: Span { start: 200, end: 208 },
             location: Span { start: 200, end: 220 },
@@ -101,6 +103,8 @@ mod tests {
                 Span { start: 0, end: 100 },
             ),
             name_span: Span { start: 9, end: 15 },
+            kind: FunctionKind::Named,
+            annotation_target: AnnotationTarget::Declaration { start: 0 },
             declared_throws: vec![],
             direct_throws: vec![],
             calls: vec![],
@@ -199,6 +203,8 @@ mod tests {
         let sig = FunctionSignature {
             id: id.clone(),
             name_span: Span { start: 9, end: 12 },
+            kind: FunctionKind::Named,
+            annotation_target: AnnotationTarget::Declaration { start: 0 },
             declared_throws: vec![],
             direct_throws: vec![ThrowSite {
                 location: Span { start: 10, end: 30 },
@@ -228,6 +234,8 @@ mod tests {
             FunctionSignature {
                 id: id.clone(),
                 name_span: Span { start: 9, end: 12 },
+                kind: FunctionKind::Named,
+                annotation_target: AnnotationTarget::Declaration { start: 0 },
                 declared_throws: vec![],
                 direct_throws: vec![ThrowSite {
                     location: Span { start: 10, end: 30 },
@@ -258,6 +266,8 @@ mod tests {
             FunctionSignature {
                 id: id.clone(),
                 name_span: Span { start: 9, end: 12 },
+                kind: FunctionKind::Named,
+                annotation_target: AnnotationTarget::Declaration { start: 0 },
                 declared_throws: vec![DeclaredThrow {
                     error_type: "MyError".into(),
                     description: None,
@@ -294,6 +304,8 @@ mod tests {
             FunctionSignature {
                 id: inner.clone(),
                 name_span: Span { start: 9, end: 14 },
+                kind: FunctionKind::Named,
+                annotation_target: AnnotationTarget::Declaration { start: 0 },
                 declared_throws: vec![],
                 direct_throws: vec![ThrowSite {
                     location: Span { start: 10, end: 30 },
@@ -312,9 +324,12 @@ mod tests {
             FunctionSignature {
                 id: outer.clone(),
                 name_span: Span { start: 9, end: 14 },
+                kind: FunctionKind::Named,
+                annotation_target: AnnotationTarget::Declaration { start: 0 },
                 declared_throws: vec![],
                 direct_throws: vec![],
                 calls: vec![CallSite {
+                    callee_kind: CalleeKind::Identifier,
                     callee_name: "inner".into(),
                     callee_span: Span { start: 50, end: 55 },
                     location: Span { start: 50, end: 60 },
@@ -350,6 +365,8 @@ mod tests {
             FunctionSignature {
                 id: func.clone(),
                 name_span: Span { start: 9, end: 12 },
+                kind: FunctionKind::Named,
+                annotation_target: AnnotationTarget::Declaration { start: 0 },
                 declared_throws: vec![],
                 direct_throws: vec![
                     ThrowSite {
@@ -392,6 +409,8 @@ mod tests {
             FunctionSignature {
                 id: func.clone(),
                 name_span: Span { start: 9, end: 12 },
+                kind: FunctionKind::Named,
+                annotation_target: AnnotationTarget::Declaration { start: 0 },
                 declared_throws: vec![],
                 direct_throws: vec![
                     ThrowSite {
@@ -434,6 +453,8 @@ mod tests {
             FunctionSignature {
                 id: method_id.clone(),
                 name_span: Span { start: 110, end: 118 },
+                kind: FunctionKind::Named,
+                annotation_target: AnnotationTarget::Declaration { start: 0 },
                 declared_throws: vec![],
                 direct_throws: vec![ThrowSite {
                     location: Span { start: 150, end: 180 },
@@ -507,6 +528,8 @@ mod tests {
             FunctionSignature {
                 id: method_id.clone(),
                 name_span: Span { start: 110, end: 118 },
+                kind: FunctionKind::Named,
+                annotation_target: AnnotationTarget::Declaration { start: 0 },
                 declared_throws: vec![],
                 direct_throws: vec![ThrowSite {
                     location: Span { start: 150, end: 180 },
@@ -577,6 +600,8 @@ mod tests {
             FunctionSignature {
                 id: method_id.clone(),
                 name_span: Span { start: 110, end: 114 },
+                kind: FunctionKind::Named,
+                annotation_target: AnnotationTarget::Declaration { start: 0 },
                 declared_throws: vec![],
                 direct_throws: vec![ThrowSite {
                     location: Span { start: 150, end: 180 },
@@ -661,6 +686,8 @@ mod tests {
         let sig = FunctionSignature {
             id: caller_fn.clone(),
             name_span: Span { start: 13, end: 18 },
+            kind: FunctionKind::Named,
+            annotation_target: AnnotationTarget::Declaration { start: 0 },
             declared_throws: vec![DeclaredThrow {
                 error_type: "Error".into(),
                 description: None,
@@ -710,6 +737,8 @@ mod tests {
             FunctionSignature {
                 id: func.clone(),
                 name_span: Span { start: 9, end: 13 },
+                kind: FunctionKind::Named,
+                annotation_target: AnnotationTarget::Declaration { start: 0 },
                 declared_throws: vec![],
                 direct_throws: vec![ThrowSite {
                     location: Span { start: 20, end: 50 },
@@ -747,6 +776,8 @@ mod tests {
             FunctionSignature {
                 id: func.clone(),
                 name_span: Span { start: 9, end: 16 },
+                kind: FunctionKind::Named,
+                annotation_target: AnnotationTarget::Declaration { start: 0 },
                 declared_throws: vec![],
                 direct_throws: vec![
                     ThrowSite {
@@ -788,6 +819,8 @@ mod tests {
             FunctionSignature {
                 id: func.clone(),
                 name_span: Span { start: 9, end: 21 },
+                kind: FunctionKind::Named,
+                annotation_target: AnnotationTarget::Declaration { start: 0 },
                 declared_throws: vec![],
                 direct_throws: vec![
                     ThrowSite {
@@ -836,6 +869,8 @@ mod tests {
             FunctionSignature {
                 id: callee.clone(),
                 name_span: Span { start: 9, end: 14 },
+                kind: FunctionKind::Named,
+                annotation_target: AnnotationTarget::Declaration { start: 0 },
                 declared_throws: vec![],
                 direct_throws: vec![ThrowSite {
                     location: Span { start: 20, end: 40 },
@@ -854,15 +889,19 @@ mod tests {
             FunctionSignature {
                 id: caller.clone(),
                 name_span: Span { start: 109, end: 118 },
+                kind: FunctionKind::Named,
+                annotation_target: AnnotationTarget::Declaration { start: 0 },
                 declared_throws: vec![],
                 direct_throws: vec![],
                 calls: vec![
                     CallSite {
+                        callee_kind: CalleeKind::Identifier,
                         callee_name: "risky".into(),
                         callee_span: Span { start: 150, end: 155 },
                         location: Span { start: 150, end: 160 },
                     },
                     CallSite {
+                        callee_kind: CalleeKind::Identifier,
                         callee_name: "risky".into(),
                         callee_span: Span { start: 300, end: 305 },
                         location: Span { start: 300, end: 310 },
@@ -914,6 +953,8 @@ mod tests {
             FunctionSignature {
                 id: f.clone(),
                 name_span: Span { start: 9, end: 10 },
+                kind: FunctionKind::Named,
+                annotation_target: AnnotationTarget::Declaration { start: 0 },
                 declared_throws: vec![],
                 direct_throws: vec![ThrowSite {
                     location: Span { start: 20, end: 40 },
@@ -933,9 +974,12 @@ mod tests {
                 FunctionSignature {
                     id: (*id).clone(),
                     name_span: Span { start: 9, end: 10 },
+                    kind: FunctionKind::Named,
+                    annotation_target: AnnotationTarget::Declaration { start: 0 },
                     declared_throws: vec![],
                     direct_throws: vec![],
                     calls: vec![CallSite {
+                        callee_kind: CalleeKind::Identifier,
                         callee_name: "f".into(),
                         callee_span: Span { start: call_loc, end: call_loc + 1 },
                         location: Span { start: call_loc, end: call_loc + 10 },
@@ -954,15 +998,19 @@ mod tests {
             FunctionSignature {
                 id: caller.clone(),
                 name_span: Span { start: 9, end: 15 },
+                kind: FunctionKind::Named,
+                annotation_target: AnnotationTarget::Declaration { start: 0 },
                 declared_throws: vec![],
                 direct_throws: vec![],
                 calls: vec![
                     CallSite {
+                        callee_kind: CalleeKind::Identifier,
                         callee_name: "a".into(),
                         callee_span: Span { start: 150, end: 151 },
                         location: Span { start: 150, end: 160 },
                     },
                     CallSite {
+                        callee_kind: CalleeKind::Identifier,
                         callee_name: "b".into(),
                         callee_span: Span { start: 300, end: 301 },
                         location: Span { start: 300, end: 310 },
@@ -1024,6 +1072,8 @@ mod tests {
             FunctionSignature {
                 id: a_find.clone(),
                 name_span: Span { start: 9, end: 13 },
+                kind: FunctionKind::Named,
+                annotation_target: AnnotationTarget::Declaration { start: 0 },
                 declared_throws: vec![],
                 direct_throws: vec![ThrowSite {
                     location: Span { start: 20, end: 40 },
@@ -1042,6 +1092,8 @@ mod tests {
             FunctionSignature {
                 id: b_find.clone(),
                 name_span: Span { start: 9, end: 13 },
+                kind: FunctionKind::Named,
+                annotation_target: AnnotationTarget::Declaration { start: 0 },
                 declared_throws: vec![],
                 direct_throws: vec![],
                 calls: vec![],
@@ -1058,15 +1110,19 @@ mod tests {
             FunctionSignature {
                 id: caller.clone(),
                 name_span: Span { start: 9, end: 15 },
+                kind: FunctionKind::Named,
+                annotation_target: AnnotationTarget::Declaration { start: 0 },
                 declared_throws: vec![],
                 direct_throws: vec![],
                 calls: vec![
                     CallSite {
+                        callee_kind: CalleeKind::Identifier,
                         callee_name: "find".into(),
                         callee_span: Span { start: 150, end: 154 },
                         location: Span { start: 150, end: 160 },
                     },
                     CallSite {
+                        callee_kind: CalleeKind::Identifier,
                         callee_name: "find".into(),
                         callee_span: Span { start: 300, end: 304 },
                         location: Span { start: 300, end: 310 },

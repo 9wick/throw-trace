@@ -57,6 +57,10 @@ throw-trace が対応すべきパターンを網羅したカタログテスト�
 | 42 | [42_closure_registration.ts](#42_closure_registrationts) | closure 登録パターン（コールバック登録 / イベントハンドラ） |
 | 43 | [43_generic_type_param.ts](#43_generic_type_paramts) | generic 型パラメータの throw パターン（constraint 置換） |
 | 44 | [44_decorator.ts](#44_decoratorts) | decorator 適用時の throw パターン（class / method / field decorator） |
+| 45 | [45_unrelated_type_error.ts](#45_unrelated_type_errorts) | 無関係な型エラーがあっても上位型のthrows宣言を正しく認識する |
+| 46 | [46_unrelated_member_name.ts](#46_unrelated_member_namets) | メソッド呼び出しを無関係な同名関数へ結び付けない |
+| 47 | [47_nested_throw_types.ts](#47_nested_throw_typests) | 構造型とnullを含むthrows宣言の判定 |
+| 48 | [48_captured_catch_error.ts](#48_captured_catch_errorts) | 内側の関数からcatch変数を再送出するパターン |
 
 ## Sync Golden Cases
 
@@ -65,6 +69,12 @@ throw-trace が対応すべきパターンを網羅したカタログテスト�
 | [01_direct_throw](#sync-01_direct_throw) | supported | 直接throwの追加・削除・置換・手書き宣言維持 |
 | [02_propagation](#sync-02_propagation) | supported | 直接throwから1段・2段・複数calleeへ伝播する同期 |
 | [03_try_catch_basic](#sync-03_try_catch_basic) | supported | catch-all・try外呼び出し・rethrowの同期境界 |
+| [04_unrelated_type_error](#sync-04_unrelated_type_error) | supported | 無関係な型エラーでError・unknownのthrows宣言を不足扱いしない |
+| [05_returned_callback](#sync-05_returned_callback) | supported | 返却コールバックの例外をファクトリへ帰属させない |
+| [06_unrelated_member_name](#sync-06_unrelated_member_name) | supported | メソッドを別スコープの同名関数へ接続しない |
+| [07_deferred_callback_sync](#sync-07_deferred_callback_sync) | supported | ファクトリの誤った生成宣言を削除し匿名コールバックへ追加しない |
+| [08_nested_throw_types](#sync-08_nested_throw_types) | supported | 構造型の波括弧とトップレベルunionを維持して同期する |
+| [09_captured_catch_error](#sync-09_captured_catch_error) | supported | catch変数の例外型を内側の即時実行関数へ引き継ぐ |
 
 ---
 
@@ -1545,12 +1555,8 @@ new Promise() コンストラクタ内の reject/throw パターン
 class CustomError extends Error {}
 
 // --- executor 内で throw ---
-// executor 内の throw はコールバックの throw として検出・伝播される。
-// 注: 実際の runtime では Promise が reject に変換するため throw としては飛ばないが、
-//     現状は sync throw と同じ扱いで伝播する（結果的に正しい報告）。
-/**
- * @throws {CustomError} from 26_promise_constructor.ts:promiseWithThrow
- */
+// executor 内の throw は Promise が rejection に変換する。
+// 外側の同期 throw としては伝播しない。匿名 executor 自身への宣言も必須にしない。
 function promiseWithThrow() {
   return new Promise((resolve) => {
     throw new CustomError();
@@ -1923,13 +1929,10 @@ function multipleAssertions(val: unknown) {
 class HandlerError extends Error {}
 
 // --- throw する関数を返す ---
-// [FALSE POSITIVE] getHandler 自体は呼んでも throw しない（関数を返すだけ）。
-// 現状: 無名関数に signature が作られず、内部の throw が getHandler に帰属される。
+// [STATUS: 対応] getHandler は関数を返すだけなので @throws 不要。
+// 匿名関数は独立して解析し、実際の呼び出し経路へだけ例外を伝播する。
 // 登録パターン（返した closure を呼ばず登録だけする）は 42_closure_registration.ts を参照
 
-/**
- * @throws {HandlerError} from 34_higher_order.ts:getHandler
- */
 function getHandler(): () => void {
   return () => {
     throw new HandlerError();
@@ -1937,10 +1940,7 @@ function getHandler(): () => void {
 }
 
 // --- 返された関数を呼ぶ ---
-// 現状: getHandler 経由の throw が伝播
-/**
- * @throws {HandlerError} from 34_higher_order.ts:getHandler
- */
+// [FALSE NEGATIVE] 返却値を変数へ代入して呼ぶ経路は未追跡。
 function callsReturnedFn() {
   const fn = getHandler();
   fn();
@@ -2202,8 +2202,8 @@ function computedCall(obj: Record<string, () => void>, key: string) {
 }
 
 // --- destructured method ---
-// 分割代入しても callee name ("find") でマッチするため伝播する。
-// 注: 名前ベースマッチなので、同名の別関数と混同する可能性あり。
+// [FALSE NEGATIVE] tsserver の定義が分割代入の binding を指す場合は、
+// 元メソッドの実装へ辿れない。同名メソッドへの推測による接続は行わない。
 
 class Repo {
   /** @throws {DynError} */
@@ -2386,14 +2386,9 @@ closure 登録パターン（コールバック登録 / イベントハンドラ
 declare function onError(h: (err: Error) => Promise<Response>): void;
 
 // --- throw する closure を返すファクトリ ---
-// [FALSE POSITIVE] createHandler 自体は呼んでも throw しない（closure を返すだけ）。
-// 現状: 無名 closure には signature が作られず、closure 内の throw が
-// 囲んでいる createHandler に帰属される。closure 直前に書いた JSDoc @throws も無視される。
-// 注: fix は JSDoc を `export const createHandler =` の後（arrow chain の途中）に挿入する
+// [STATUS: 対応] createHandler は closure を返すだけなので @throws 不要。
+// 匿名関数は伝播解析に使うが、単独の @throws は必須にしない。
 
-/**
- * @throws {Error} from 42_closure_registration.ts:createHandler
- */
 export const createHandler =
   (flag: () => boolean) =>
   async (err: Error): Promise<Response> => {
@@ -2402,13 +2397,9 @@ export const createHandler =
   };
 
 // --- closure を登録するだけで呼ばない ---
-// [FALSE POSITIVE] registerHandler はいかなる経路でも throw しない。
-// closure を呼ぶのはフレームワーク側だが、ファクトリに帰属された throw が
-// ファクトリ呼び出し元の registerHandler へ伝播してしまう
+// registerHandler は closure を作成・登録するだけなので @throws 不要。
+// ファクトリの呼び出し元へ closure の throw を伝播させない。
 
-/**
- * @throws {Error} from 42_closure_registration.ts:createHandler
- */
 export const registerHandler = (): void => {
   onError(createHandler(() => true));
 };
@@ -2642,6 +2633,71 @@ function definesDecoratedClass() {
 // method / constructor のスコープ外（class 定義を囲むスコープ）に帰属される。
 // TC39 decorator ではパラメータ decorator が存在せず型エラーになるため、
 // このカタログには含めない。
+```
+
+### 45_unrelated_type_error.ts
+
+無関係な型エラーがあっても上位型のthrows宣言を正しく認識する
+
+```typescript
+// 無関係な型エラーがあっても上位型のthrows宣言を正しく認識する
+
+/** @throws {TypeError} */
+const dangerous = (): void => { throw new TypeError('example'); };
+
+/** @throws {unknown} */
+export const allowsUnknown = (): void => dangerous();
+
+/** @throws {Error} */
+export const allowsError = (): void => dangerous();
+
+const unrelated: string = 123;
+```
+
+### 46_unrelated_member_name.ts
+
+メソッド呼び出しを無関係な同名関数へ結び付けない
+
+```typescript
+// メソッド呼び出しを無関係な同名関数へ結び付けない
+
+interface Scope { run<T>(fn: () => T): T }
+
+export const runWithScope = (scope: Scope): void => scope.run(() => undefined);
+
+export const makeTaskRunner = () => {
+  /** @throws {RangeError} */
+  const run = (): void => { throw new RangeError('unrelated run'); };
+  return { run };
+};
+```
+
+### 47_nested_throw_types.ts
+
+構造型とnullを含むthrows宣言の判定
+
+```typescript
+// 構造型とnullを含むthrows宣言の判定
+
+/** @throws {{} | null} */
+export function runBuild(value: {} | null) { throw value; }
+```
+
+### 48_captured_catch_error.ts
+
+内側の関数からcatch変数を再送出するパターン
+
+```typescript
+// 内側の関数からcatch変数を再送出するパターン
+
+/** @throws {TypeError} */
+function dangerous() { throw new TypeError(); }
+
+/** @throws {TypeError} */
+export function getBody() {
+  try { dangerous(); }
+  catch (error) { return (() => { throw error; })(); }
+}
 ```
 
 ---
@@ -2989,6 +3045,197 @@ function rethrowAll() {
   } catch (error) {
     throw error;
   }
+}
+```
+
+### Sync 04_unrelated_type_error
+
+無関係な型エラーでError・unknownのthrows宣言を不足扱いしない
+
+#### Before
+
+```typescript
+/** @throws {TypeError} */
+const dangerous = (): void => { throw new TypeError('example'); };
+
+/** @throws {unknown} */
+export const allowsUnknown = (): void => dangerous();
+
+/** @throws {Error} */
+export const allowsError = (): void => dangerous();
+
+const unrelated: string = 123;
+```
+
+#### Expected
+
+```typescript
+/** @throws {TypeError} */
+const dangerous = (): void => { throw new TypeError('example'); };
+
+/**
+ * @throws {TypeError} from before.ts:dangerous
+ */
+export const allowsUnknown = (): void => dangerous();
+
+/**
+ * @throws {TypeError} from before.ts:dangerous
+ */
+export const allowsError = (): void => dangerous();
+
+const unrelated: string = 123;
+```
+
+### Sync 05_returned_callback
+
+返却コールバックの例外をファクトリへ帰属させない
+
+#### Before
+
+```typescript
+/** @throws {TypeError} */
+const dangerous = (): void => { throw new TypeError('deferred'); };
+
+export const makeDeferred = () =>
+  /** @throws {TypeError} */
+  () => dangerous();
+
+export function makeFunction() {
+  return /** @throws {TypeError} */ function () { dangerous(); };
+}
+
+export function makeNamedFunction() {
+  return /** @throws {TypeError} */ function deferred() { dangerous(); };
+}
+```
+
+#### Expected
+
+```typescript
+/** @throws {TypeError} */
+const dangerous = (): void => { throw new TypeError('deferred'); };
+
+export const makeDeferred = () =>
+  /** @throws {TypeError} */
+  () => dangerous();
+
+export function makeFunction() {
+  return /** @throws {TypeError} */ function () { dangerous(); };
+}
+
+export function makeNamedFunction() {
+  return /** @throws {TypeError} */ function deferred() { dangerous(); };
+}
+```
+
+### Sync 06_unrelated_member_name
+
+メソッドを別スコープの同名関数へ接続しない
+
+#### Before
+
+```typescript
+interface Scope { run<T>(fn: () => T): T }
+
+export const runWithScope = (scope: Scope): void => scope.run(() => undefined);
+
+export const makeTaskRunner = () => {
+  /** @throws {RangeError} */
+  const run = (): void => { throw new RangeError('unrelated run'); };
+  return { run };
+};
+```
+
+#### Expected
+
+```typescript
+interface Scope { run<T>(fn: () => T): T }
+
+export const runWithScope = (scope: Scope): void => scope.run(() => undefined);
+
+export const makeTaskRunner = () => {
+  /** @throws {RangeError} */
+  const run = (): void => { throw new RangeError('unrelated run'); };
+  return { run };
+};
+```
+
+### Sync 07_deferred_callback_sync
+
+ファクトリの誤った生成宣言を削除し匿名コールバックへ追加しない
+
+#### Before
+
+```typescript
+/** @throws {TypeError} */
+function dangerous() { throw new TypeError(); }
+
+/** @throws {TypeError} from before.ts:dangerous */
+export const makeDeferred = () =>
+  () => dangerous();
+
+export function makeFunction() { return function () { dangerous(); }; }
+```
+
+#### Expected
+
+```typescript
+/** @throws {TypeError} */
+function dangerous() { throw new TypeError(); }
+
+export const makeDeferred = () =>
+  () => dangerous();
+
+export function makeFunction() { return function () { dangerous(); }; }
+```
+
+### Sync 08_nested_throw_types
+
+構造型の波括弧とトップレベルunionを維持して同期する
+
+#### Before
+
+```typescript
+/** @throws {{} | null} */
+export function runBuild(value: {} | null) { throw value; }
+```
+
+#### Expected
+
+```typescript
+/**
+ * @throws {{} | null} from before.ts:runBuild
+ */
+export function runBuild(value: {} | null) { throw value; }
+```
+
+### Sync 09_captured_catch_error
+
+catch変数の例外型を内側の即時実行関数へ引き継ぐ
+
+#### Before
+
+```typescript
+/** @throws {TypeError} */
+function dangerous() { throw new TypeError(); }
+
+/** @throws {TypeError} */
+export function getBody() {
+  try { dangerous(); }
+  catch (error) { return (() => { throw error; })(); }
+}
+```
+
+#### Expected
+
+```typescript
+/** @throws {TypeError} */
+function dangerous() { throw new TypeError(); }
+
+/** @throws {TypeError} */
+export function getBody() {
+  try { dangerous(); }
+  catch (error) { return (() => { throw error; })(); }
 }
 ```
 

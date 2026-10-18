@@ -3,13 +3,10 @@
 class HandlerError extends Error {}
 
 // --- throw する関数を返す ---
-// [FALSE POSITIVE] getHandler 自体は呼んでも throw しない（関数を返すだけ）。
-// 現状: 無名関数に signature が作られず、内部の throw が getHandler に帰属される。
+// [STATUS: 対応] getHandler は関数を返すだけなので @throws 不要。
+// 匿名関数は独立して解析し、実際の呼び出し経路へだけ例外を伝播する。
 // 登録パターン（返した closure を呼ばず登録だけする）は 42_closure_registration.ts を参照
 
-/**
- * @throws {HandlerError} from 34_higher_order.ts:getHandler
- */
 function getHandler(): () => void {
   return () => {
     throw new HandlerError();
@@ -17,10 +14,7 @@ function getHandler(): () => void {
 }
 
 // --- 返された関数を呼ぶ ---
-// 現状: getHandler 経由の throw が伝播
-/**
- * @throws {HandlerError} from 34_higher_order.ts:getHandler
- */
+// [FALSE NEGATIVE] 返却値を変数へ代入して呼ぶ経路は未追跡。
 function callsReturnedFn() {
   const fn = getHandler();
   fn();

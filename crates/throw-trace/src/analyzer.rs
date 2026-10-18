@@ -6,9 +6,10 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 use throw_trace_core::{
-    compute_propagated_throws, find_missing_declarations, generate_lsp_violations, CallGraph,
-    Diagnostic, FunctionId, FunctionSignature, LspViolation, MethodSignature, PropagatedThrow,
-    Span, TypeRelation, TypeResolver,
+    compute_propagated_throws, find_missing_declarations, generate_lsp_violations,
+    AnnotationTarget, CallGraph, CalleeKind, Diagnostic, FunctionId, FunctionKind,
+    FunctionSignature, LspViolation, MethodSignature, PropagatedThrow, Span, TypeRelation,
+    TypeResolver,
 };
 use throw_trace_ts::{byte_offset_to_line_col, extract_all, TsServer, TsServerTypeResolver};
 
@@ -32,13 +33,14 @@ pub struct Analyzer {
     entry_files: HashSet<PathBuf>,
     analyzed_files: HashSet<PathBuf>,
     config: AnalyzerConfig,
-    /// Maps `(caller_file, callee_span)` -> `(def_file, def_line)` for resolved definitions
-    resolved_calls: HashMap<(PathBuf, Span), (PathBuf, u32)>,
+    /// Maps each call to the exact definition position (1-based line and UTF-16 offset).
+    resolved_calls: HashMap<(PathBuf, Span), (PathBuf, u32, u32)>,
     cache: CacheStore,
 }
 
 pub struct ThrowContract {
     pub function: FunctionId,
+    pub annotation_target: AnnotationTarget,
     pub required_throws: Vec<PropagatedThrow>,
 }
 
@@ -173,6 +175,9 @@ impl Analyzer {
         let mut calls_by_file: HashMap<PathBuf, HashSet<Span>> = HashMap::new();
         for sig in self.signatures.values() {
             for call in &sig.calls {
+                if call.callee_kind == CalleeKind::Inline {
+                    continue;
+                }
                 if !self.resolved_calls.contains_key(&(sig.id.file_path.clone(), call.callee_span))
                 {
                     calls_by_file
@@ -196,11 +201,13 @@ impl Analyzer {
                 else {
                     continue;
                 };
-                if let Some((def_file, def_line)) =
+                if let Some((def_file, def_line, def_offset)) =
                     definitions.lookup(&file_path, &content_hash, callee_span, callee_text)
                 {
-                    self.resolved_calls
-                        .insert((file_path.clone(), callee_span), (def_file.clone(), def_line));
+                    self.resolved_calls.insert(
+                        (file_path.clone(), callee_span),
+                        (def_file.clone(), def_line, def_offset),
+                    );
                     if !self.analyzed_files.contains(&def_file) {
                         targets.insert(def_file);
                     }
@@ -218,14 +225,14 @@ impl Analyzer {
                             def_path.canonicalize().unwrap_or_else(|_| def_path.clone());
                         self.resolved_calls.insert(
                             (file_path.clone(), callee_span),
-                            (canonical.clone(), def.start.line),
+                            (canonical.clone(), def.start.line, def.start.offset),
                         );
                         definitions.update(
                             &file_path,
                             content_hash.clone(),
                             callee_span,
                             callee_text.to_string(),
-                            (canonical.clone(), def.start.line),
+                            (canonical.clone(), def.start.line, def.start.offset),
                         );
                         if !self.analyzed_files.contains(&canonical) {
                             targets.insert(canonical);
@@ -243,13 +250,15 @@ impl Analyzer {
     }
 
     fn build_call_graph(&mut self) {
-        let mut sig_by_file_and_line: HashMap<(PathBuf, u32), &FunctionId> = HashMap::new();
+        let mut sig_by_position: HashMap<(PathBuf, u32, u32), &FunctionId> = HashMap::new();
+        let mut sig_by_span: HashMap<(PathBuf, Span), &FunctionId> = HashMap::new();
         let mut sig_by_name: HashMap<&str, Vec<&FunctionId>> = HashMap::new();
 
         for sig in self.signatures.values() {
             let source = fs::read_to_string(&sig.id.file_path).unwrap_or_default();
-            let (line, _) = byte_offset_to_line_col(&source, sig.name_span.start);
-            sig_by_file_and_line.insert((sig.id.file_path.clone(), line), &sig.id);
+            let (line, col) = byte_offset_to_line_col(&source, sig.name_span.start);
+            sig_by_position.insert((sig.id.file_path.clone(), line, col), &sig.id);
+            sig_by_span.insert((sig.id.file_path.clone(), sig.id.span), &sig.id);
             sig_by_name.entry(sig.id.name.as_str()).or_default().push(&sig.id);
         }
 
@@ -259,19 +268,29 @@ impl Analyzer {
             .flat_map(|sig| {
                 sig.calls.iter().filter_map(|call| {
                     let key = (sig.id.file_path.clone(), call.callee_span);
-                    if let Some((def_file, def_line)) = self.resolved_calls.get(&key) {
-                        if let Some(callee_id) =
-                            sig_by_file_and_line.get(&(def_file.clone(), *def_line))
-                        {
-                            return Some((sig.id.clone(), (*callee_id).clone(), call.location));
-                        }
+                    if call.callee_kind == CalleeKind::Inline {
+                        return sig_by_span.get(&key).map(|callee_id| {
+                            (sig.id.clone(), (*callee_id).clone(), call.location)
+                        });
+                    }
+                    if let Some(target) = self.resolved_calls.get(&key) {
+                        // A resolved declaration without a body is not another same-named function.
+                        return sig_by_position.get(target).map(|callee_id| {
+                            (sig.id.clone(), (*callee_id).clone(), call.location)
+                        });
+                    }
+                    if call.callee_kind == CalleeKind::Member {
+                        return None;
                     }
 
                     let candidates = sig_by_name.get(call.callee_name.as_str())?;
-                    candidates
-                        .iter()
-                        .find(|c| c.file_path == sig.id.file_path)
-                        .map(|callee_id| (sig.id.clone(), (*callee_id).clone(), call.location))
+                    let mut local_candidates =
+                        candidates.iter().filter(|c| c.file_path == sig.id.file_path);
+                    let callee_id = local_candidates.next()?;
+                    if local_candidates.next().is_some() {
+                        return None;
+                    }
+                    Some((sig.id.clone(), (*callee_id).clone(), call.location))
                 })
             })
             .collect();
@@ -414,13 +433,22 @@ impl Analyzer {
                     &self.signatures,
                     resolver,
                 );
-                Some(ThrowContract { function: func_id.clone(), required_throws })
+                Some(ThrowContract {
+                    function: func_id.clone(),
+                    annotation_target: sig.annotation_target,
+                    required_throws,
+                })
             })
             .collect()
     }
 
     fn sorted_function_ids(&self) -> Vec<FunctionId> {
-        let mut function_ids: Vec<FunctionId> = self.signatures.keys().cloned().collect();
+        let mut function_ids: Vec<FunctionId> = self
+            .signatures
+            .values()
+            .filter(|sig| sig.kind == FunctionKind::Named)
+            .map(|sig| sig.id.clone())
+            .collect();
         function_ids.sort_by_key(function_id_sort_key);
         function_ids
     }
@@ -457,7 +485,7 @@ impl Analyzer {
             parts.push(("function_signature".to_string(), CacheStore::stable_json_hash(sig)));
         }
 
-        for callee in self.sorted_transitive_callees(func_id) {
+        for callee in self.sorted_semantic_dependencies(func_id) {
             if let Some(sig) = self.signatures.get(&callee) {
                 parts.push(("callee_signature".to_string(), CacheStore::stable_json_hash(sig)));
             }
@@ -491,10 +519,36 @@ impl Analyzer {
         ))
     }
 
-    fn sorted_transitive_callees(&self, func_id: &FunctionId) -> Vec<FunctionId> {
-        let mut callees = self.graph.get_transitive_callees(func_id);
-        callees.sort_by_key(function_id_sort_key);
-        callees
+    fn captured_sources(&self, func_id: &FunctionId) -> Vec<FunctionId> {
+        self.signatures
+            .get(func_id)
+            .into_iter()
+            .flat_map(|sig| &sig.direct_throws)
+            .filter_map(|site| match &site.error_type {
+                throw_trace_core::ErrorType::CapturedRethrow { function, .. } => {
+                    Some(function.clone())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn sorted_semantic_dependencies(&self, func_id: &FunctionId) -> Vec<FunctionId> {
+        let mut visited = HashSet::from([func_id.clone()]);
+        let mut stack = vec![func_id.clone()];
+        while let Some(current) = stack.pop() {
+            for next in
+                self.graph.get_callees(&current).into_iter().chain(self.captured_sources(&current))
+            {
+                if visited.insert(next.clone()) {
+                    stack.push(next);
+                }
+            }
+        }
+        visited.remove(func_id);
+        let mut dependencies: Vec<_> = visited.into_iter().collect();
+        dependencies.sort_by_key(function_id_sort_key);
+        dependencies
     }
 
     fn sorted_reachable_call_edges(
@@ -506,6 +560,11 @@ impl Analyzer {
         let mut edges = Vec::new();
 
         while let Some(caller) = stack.pop() {
+            for source in self.captured_sources(&caller) {
+                if visited.insert(source.clone()) {
+                    stack.push(source);
+                }
+            }
             let mut callees = self.graph.get_callees(&caller);
             callees.sort_by_key(function_id_sort_key);
 

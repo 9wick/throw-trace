@@ -308,6 +308,7 @@ impl TsServerTypeResolver {
         Ok(())
     }
 
+    #[cfg(test)]
     #[allow(clippy::cast_possible_truncation)]
     fn count_lines(file_path: &Path) -> u32 {
         std::fs::read_to_string(file_path).map(|s| s.lines().count() as u32).unwrap_or(1)
@@ -329,7 +330,8 @@ pub fn byte_offset_to_line_col(source: &str, offset: u32) -> (u32, u32) {
             line += 1;
             col = 1;
         } else {
-            col += 1;
+            col +=
+                u32::try_from(ch.len_utf16()).expect("a character uses at most two UTF-16 units");
         }
     }
     (line, col)
@@ -352,20 +354,57 @@ impl throw_trace_core::TypeResolver for TsServerTypeResolver {
             return result;
         }
 
+        if thrown_type.contains('|') {
+            if let Some(types) =
+                crate::jsdoc::split_throw_types(thrown_type).filter(|types| types.len() > 1)
+            {
+                let result =
+                    types.iter().all(|ty| self.is_assignable_to(file_path, ty, declared_type));
+                self.check_cache.insert(cache_key, result);
+                return result;
+            }
+        }
+        if declared_type.contains('|') {
+            if let Some(types) =
+                crate::jsdoc::split_throw_types(declared_type).filter(|types| types.len() > 1)
+            {
+                if types.iter().any(|ty| self.is_assignable_to(file_path, thrown_type, ty)) {
+                    self.check_cache.insert(cache_key, true);
+                    return true;
+                }
+            }
+        }
+
         if self.ensure_file_open(file_path).is_err() {
             return thrown_type == declared_type;
         }
 
-        let line_count = Self::count_lines(file_path);
-        let check_line = line_count + 1;
-        let check_code = format!("const _typeCheck: {declared_type} = null! as {thrown_type};\n");
+        let Ok(source) = std::fs::read_to_string(file_path) else {
+            return false;
+        };
+        let Ok(end) = u32::try_from(source.len()) else {
+            return false;
+        };
+        let (end_line, end_col) = byte_offset_to_line_col(&source, end);
+        let check_line = u64::from(end_line) + 1;
+        // A new block avoids collisions with user bindings; the newline also handles
+        // files ending without a newline or with a trailing line comment.
+        let check_code = format!("\n{{ const _typeCheck: {declared_type} = null! as {thrown_type}; void _typeCheck; }}\n");
+        let check_end_line = u64::from(end_line)
+            + u64::try_from(check_code.lines().count()).expect("line count fits u64");
 
-        if self.server.update_open(file_path, check_line, 1, &check_code).is_err() {
+        if self.server.update_open(file_path, end_line, end_col, &check_code).is_err() {
             return thrown_type == declared_type;
         }
 
         let result = match self.server.semantic_diagnostics(file_path) {
-            Ok(diagnostics) => diagnostics.is_empty(),
+            Ok(diagnostics) => !diagnostics.iter().any(|diagnostic| {
+                let line = diagnostic
+                    .get("start")
+                    .and_then(|start| start.get("line"))
+                    .and_then(serde_json::Value::as_u64);
+                line.is_some_and(|line| line >= check_line && line <= check_end_line)
+            }),
             Err(_) => thrown_type == declared_type,
         };
 
@@ -403,13 +442,74 @@ impl throw_trace_core::TypeResolver for TsServerTypeResolver {
 
         let display = self.server.quick_info(file_path, line, col).ok()??;
 
-        if let Some(colon_pos) = display.rfind(':') {
-            let type_part = display[colon_pos + 1..].trim();
-            return Some(type_part.to_string());
-        }
-
-        None
+        type_from_quick_info(&display).map(normalize_type_display)
     }
+}
+
+fn normalize_type_display(display: &str) -> String {
+    let mut result = String::new();
+    let mut quote = None;
+    let mut escaped = false;
+    let mut whitespace = false;
+    for ch in display.chars() {
+        if let Some(delimiter) = quote {
+            result.push(ch);
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == delimiter {
+                quote = None;
+            }
+        } else if ch.is_whitespace() {
+            whitespace = true;
+        } else {
+            if whitespace && !result.is_empty() {
+                result.push(' ');
+            }
+            whitespace = false;
+            if matches!(ch, '\'' | '"' | '`') {
+                quote = Some(ch);
+            }
+            result.push(ch);
+        }
+    }
+    result
+}
+
+fn type_from_quick_info(display: &str) -> Option<&str> {
+    let mut delimiters = Vec::new();
+    let mut quote = None;
+    let mut escaped = false;
+    let mut previous = None;
+    for (offset, ch) in display.char_indices() {
+        if let Some(delimiter) = quote {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == delimiter {
+                quote = None;
+            }
+        } else {
+            match ch {
+                '\'' | '"' | '`' => quote = Some(ch),
+                '(' => delimiters.push(')'),
+                '[' => delimiters.push(']'),
+                '{' => delimiters.push('}'),
+                '<' => delimiters.push('>'),
+                ')' | ']' | '}' | '>'
+                    if delimiters.last() == Some(&ch) && !(ch == '>' && previous == Some('=')) =>
+                {
+                    delimiters.pop();
+                }
+                ':' if delimiters.is_empty() => return Some(display[offset + 1..].trim()),
+                _ => {}
+            }
+        }
+        previous = Some(ch);
+    }
+    None
 }
 
 fn which_tsserver() -> Result<String, TsServerError> {
@@ -435,6 +535,26 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
     use throw_trace_core::TypeResolver;
+
+    #[test]
+    fn quick_info_preserves_structured_types_and_method_returns() {
+        assert_eq!(
+            type_from_quick_info(
+                "(parameter) value: { code: string | number; nested: { message: string } }"
+            ),
+            Some("{ code: string | number; nested: { message: string } }")
+        );
+        assert_eq!(
+            type_from_quick_info("(method) Factory.create(input: string): { code: number }"),
+            Some("{ code: number }")
+        );
+        assert_eq!(
+            type_from_quick_info(
+                "function create<F extends (value: string) => number>(fn: F): Error"
+            ),
+            Some("Error")
+        );
+    }
 
     #[test]
     #[ignore = "requires tsserver installed"]
